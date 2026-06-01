@@ -552,9 +552,15 @@ app.get('/api/mylist', authMiddleware, async (req, res) => { const user = await 
 app.get('/stream/:id', async (req, res) => { try { const content = await Content.findById(req.params.id); if (!content) return res.status(404).send('Content not found'); const partIndex = parseInt(req.query.part) || 0; let videoUrl = ''; if (content.type === 'movie' && content.parts && content.parts.length > partIndex) { videoUrl = content.parts[partIndex].videoUrl; } else if (content.type === 'series' && content.seasons) { const seasonIndex = parseInt(req.query.season) || 0; const episodeIndex = parseInt(req.query.episode) || 0; if (content.seasons[seasonIndex] && content.seasons[seasonIndex].episodes && content.seasons[seasonIndex].episodes[episodeIndex]) { videoUrl = content.seasons[seasonIndex].episodes[episodeIndex].videoUrl; } } if (!videoUrl) return res.status(404).send('No video URL found'); if (videoUrl.includes('pixeldrain.com/u/')) { videoUrl = videoUrl.replace('pixeldrain.com/u/', 'pixeldrain.com/api/file/'); } if (videoUrl.startsWith('/uploads/')) { return res.redirect(videoUrl); } res.redirect(videoUrl); } catch (err) { console.error('Stream error:', err); res.status(500).send('Streaming error'); } });
 
 // ========== CLEAN URL ROUTES (FIXED FOR RAILWAY) ==========
-const publicPath = path.join(__dirname, 'public');
-console.log('Public path:', publicPath);
-console.log('Files in public:', fs.existsSync(publicPath) ? fs.readdirSync(publicPath) : 'NOT FOUND');
+let publicPath = path.join(__dirname, 'public');
+if (!fs.existsSync(publicPath)) {
+    publicPath = path.join(__dirname, '..', 'public');
+}
+if (!fs.existsSync(publicPath)) {
+    publicPath = path.join(process.cwd(), 'public');
+}
+console.log('Final public path:', publicPath, 'Exists:', fs.existsSync(publicPath));
+console.log('Files:', fs.existsSync(publicPath) ? fs.readdirSync(publicPath) : 'NOT FOUND');
 
 app.use(express.static(publicPath));
 
@@ -591,7 +597,6 @@ app.get('*', (req, res) => {
         res.status(404).send('File not found at: ' + filePath);
     }
 });
-
 // ========== START ==========
 createAdmins().then(() => {
     const PORT = process.env.PORT || 3000;
