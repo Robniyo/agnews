@@ -553,13 +553,44 @@ app.get('/stream/:id', async (req, res) => { try { const content = await Content
 
 // ========== CLEAN URL ROUTES (FIXED FOR RAILWAY) ==========
 const publicPath = path.join(__dirname, 'public');
+console.log('Public path:', publicPath);
+console.log('Files in public:', fs.existsSync(publicPath) ? fs.readdirSync(publicPath) : 'NOT FOUND');
+
 app.use(express.static(publicPath));
-app.get('/', (req, res) => { res.sendFile(path.join(publicPath, 'index.html')); });
-app.get('/admin', (req, res) => { const token = req.query.token; if (!token) return res.sendFile(path.join(publicPath, 'admin-login.html')); try { jwt.verify(token, process.env.JWT_SECRET || 'agnews_final_secret_2026'); res.sendFile(path.join(publicPath, 'admin.html')); } catch (err) { res.sendFile(path.join(publicPath, 'admin-login.html')); } });
+
+app.get('/', (req, res) => {
+    const filePath = path.join(publicPath, 'index.html');
+    console.log('Serving:', filePath, 'Exists:', fs.existsSync(filePath));
+    if (fs.existsSync(filePath)) {
+        res.sendFile(filePath);
+    } else {
+        res.status(404).send('index.html not found at: ' + filePath);
+    }
+});
+
+app.get('/admin', (req, res) => {
+    const token = req.query.token;
+    if (!token) return res.sendFile(path.join(publicPath, 'admin-login.html'));
+    try {
+        jwt.verify(token, process.env.JWT_SECRET || 'agnews_final_secret_2026');
+        res.sendFile(path.join(publicPath, 'admin.html'));
+    } catch (err) {
+        res.sendFile(path.join(publicPath, 'admin-login.html'));
+    }
+});
+
 app.get('/admin-login', (req, res) => { res.sendFile(path.join(publicPath, 'admin-login.html')); });
 app.get('/admin.html', (req, res) => { res.redirect('/admin-login'); });
 app.get('/index.html', (req, res) => { res.redirect('/'); });
-app.get('*', (req, res) => { res.sendFile(path.join(publicPath, 'index.html')); });
+
+app.get('*', (req, res) => {
+    const filePath = path.join(publicPath, 'index.html');
+    if (fs.existsSync(filePath)) {
+        res.sendFile(filePath);
+    } else {
+        res.status(404).send('File not found at: ' + filePath);
+    }
+});
 
 // ========== START ==========
 createAdmins().then(() => {
