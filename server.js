@@ -14,11 +14,12 @@ const app = express();
 
 app.use(cors());
 app.use(express.json({ limit: '200mb' }));
-app.use('/uploads', express.static('uploads'));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Create folders
 ['uploads', 'uploads/videos', 'uploads/thumbnails', 'uploads/trailers', 'uploads/ads', 'uploads/payments'].forEach(folder => {
-    if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
+    const dir = path.join(__dirname, folder);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
 
 // MongoDB Connection
@@ -51,7 +52,6 @@ async function sendEmail(to, subject, html) {
 }
 
 // ========== MODELS ==========
-
 const DeviceSchema = new mongoose.Schema({
     deviceId: String, deviceName: String, ipAddress: String,
     lastLogin: { type: Date, default: Date.now }, loginCount: { type: Number, default: 1 }
@@ -168,11 +168,11 @@ const Ad = mongoose.model('Ad', AdSchema);
 // ========== MULTER ==========
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        if (file.fieldname === 'thumbnail') cb(null, 'uploads/thumbnails/');
-        else if (file.fieldname === 'trailer') cb(null, 'uploads/trailers/');
-        else if (file.fieldname === 'adMedia') cb(null, 'uploads/ads/');
-        else if (file.fieldname === 'paymentScreenshot') cb(null, 'uploads/payments/');
-        else cb(null, 'uploads/videos/');
+        if (file.fieldname === 'thumbnail') cb(null, path.join(__dirname, 'uploads/thumbnails/'));
+        else if (file.fieldname === 'trailer') cb(null, path.join(__dirname, 'uploads/trailers/'));
+        else if (file.fieldname === 'adMedia') cb(null, path.join(__dirname, 'uploads/ads/'));
+        else if (file.fieldname === 'paymentScreenshot') cb(null, path.join(__dirname, 'uploads/payments/'));
+        else cb(null, path.join(__dirname, 'uploads/videos/'));
     },
     filename: (req, file, cb) => {
         cb(null, Date.now() + '-' + Math.round(Math.random() * 1E9) + '-' + file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_'));
@@ -249,37 +249,24 @@ app.post('/api/register', async (req, res) => {
         if (!email || !password) return res.status(400).json({ error: '📧 Email and 🔒 password required!' });
         if (password.length < 6) return res.status(400).json({ error: '🔒 Password must be at least 6 characters!' });
         if (await User.findOne({ email })) return res.status(400).json({ error: '📧 Email already registered!' });
-        
         const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-        const verificationExpires = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
-        
+        const verificationExpires = new Date(Date.now() + 30 * 60 * 1000);
         const user = await User.create({
             email, password: await bcrypt.hash(password, 10), fullName: fullName || 'Movie Lover 🍿', phone: phone || '',
-            isEmailVerified: false,
-            emailVerificationCode: verificationCode,
-            emailVerificationExpires: verificationExpires,
+            isEmailVerified: false, emailVerificationCode: verificationCode, emailVerificationExpires: verificationExpires,
             subscription: { plan: 'free', duration: 'none', startDate: new Date(), status: 'active', maxDevices: 6 },
             notifications: [{ message: '🎉 Welcome to AGASOBANUYE MOVIES! Please verify your email.', type: 'system' }]
         });
-        
-        // Send verification email
         sendEmail(email, 'Verify Your AGNEWS Account - Code: ' + verificationCode,
             '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif">' +
-            '<h1 style="color:#E53935">🎬 AGASOBANUYE MOVIES</h1>' +
-            '<h2>Welcome ' + (fullName || 'Movie Lover') + '! 🍿</h2>' +
-            '<p>Your verification code is:</p>' +
-            '<h1 style="color:#FFC107;font-size:3rem;letter-spacing:5px">' + verificationCode + '</h1>' +
-            '<p>Enter this code on the verification page.</p>' +
-            '<p style="color:#b3b3b3">Code expires in 30 minutes.</p>' +
-            '<p style="color:#b3b3b3">📞 Need help? +250 795 064 502</p></div>'
-        );
-        
+            '<h1 style="color:#E53935">🎬 AGASOBANUYE MOVIES</h1><h2>Welcome ' + (fullName || 'Movie Lover') + '! 🍿</h2>' +
+            '<p>Your verification code is:</p><h1 style="color:#FFC107;font-size:3rem;letter-spacing:5px">' + verificationCode + '</h1>' +
+            '<p>Enter this code on the verification page.</p><p style="color:#b3b3b3">Code expires in 30 minutes.</p></div>');
         const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET || 'agnews_final_secret_2026');
         res.status(201).json({ token, user: { id: user._id, email, role: user.role, fullName: user.fullName, subscription: user.subscription, isEmailVerified: false }, message: '🎉 Account created! Please check your email for verification code.' });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Verify Email
 app.post('/api/verify-email', authMiddleware, async (req, res) => {
     try {
         const { code } = req.body;
@@ -288,31 +275,22 @@ app.post('/api/verify-email', authMiddleware, async (req, res) => {
         if (user.isEmailVerified) return res.json({ success: true, message: 'Email already verified!' });
         if (user.emailVerificationCode !== code) return res.status(400).json({ error: '❌ Invalid verification code.' });
         if (new Date() > user.emailVerificationExpires) return res.status(400).json({ error: '⏰ Verification code expired. Request a new one.' });
-        user.isEmailVerified = true;
-        user.emailVerificationCode = undefined;
-        user.emailVerificationExpires = undefined;
+        user.isEmailVerified = true; user.emailVerificationCode = undefined; user.emailVerificationExpires = undefined;
         user.notifications.push({ message: '✅ Email verified successfully!', type: 'success' });
         await user.save();
         res.json({ success: true, message: '✅ Email verified!' });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Resend verification code
 app.post('/api/resend-verification', authMiddleware, async (req, res) => {
     try {
         const user = await User.findById(req.user.id);
         if (!user) return res.status(404).json({ error: 'User not found' });
         if (user.isEmailVerified) return res.json({ success: true, message: 'Email already verified!' });
         const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-        user.emailVerificationCode = verificationCode;
-        user.emailVerificationExpires = new Date(Date.now() + 30 * 60 * 1000);
+        user.emailVerificationCode = verificationCode; user.emailVerificationExpires = new Date(Date.now() + 30 * 60 * 1000);
         await user.save();
-        sendEmail(user.email, 'New Verification Code - AGNEWS',
-            '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif">' +
-            '<h1 style="color:#E53935">🎬 AGASOBANUYE MOVIES</h1>' +
-            '<p>Your new verification code is:</p>' +
-            '<h1 style="color:#FFC107;font-size:3rem;letter-spacing:5px">' + verificationCode + '</h1></div>'
-        );
+        sendEmail(user.email, 'New Verification Code - AGNEWS', '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif"><h1 style="color:#E53935">🎬 AGASOBANUYE MOVIES</h1><p>Your new verification code is:</p><h1 style="color:#FFC107;font-size:3rem;letter-spacing:5px">' + verificationCode + '</h1></div>');
         res.json({ success: true, message: '📧 New code sent!' });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -366,13 +344,11 @@ app.get('/api/me', authMiddleware, async (req, res) => {
     res.json({ ...user.toObject(), expiryAlert, unreadNotifications });
 });
 
-// Get notifications
 app.get('/api/notifications', authMiddleware, async (req, res) => {
     const user = await User.findById(req.user.id);
     res.json(user.notifications || []);
 });
 
-// Mark notifications as read
 app.put('/api/notifications/read', authMiddleware, async (req, res) => {
     const user = await User.findById(req.user.id);
     user.notifications.forEach(n => n.read = true);
@@ -393,20 +369,15 @@ app.get('/api/contents', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Get single content with smart views
 app.get('/api/contents/:id', async (req, res) => {
     try {
         const content = await Content.findById(req.params.id);
         if (!content) return res.status(404).json({ error: '🎬 Content not found!' });
-        
         const userId = req.user?.id || null;
         const deviceId = req.headers['x-device-id'] || req.ip || 'unknown';
         let alreadyViewed = false;
-        if (userId) {
-            alreadyViewed = content.viewedBy && content.viewedBy.some(v => v.userId && v.userId.toString() === userId.toString());
-        } else {
-            alreadyViewed = content.viewedBy && content.viewedBy.some(v => v.deviceId === deviceId);
-        }
+        if (userId) { alreadyViewed = content.viewedBy && content.viewedBy.some(v => v.userId && v.userId.toString() === userId.toString()); }
+        else { alreadyViewed = content.viewedBy && content.viewedBy.some(v => v.deviceId === deviceId); }
         if (!alreadyViewed) {
             content.views = (content.views || 0) + 1;
             if (!content.viewedBy) content.viewedBy = [];
@@ -418,21 +389,14 @@ app.get('/api/contents/:id', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Download with status check
 app.post('/api/contents/:id/download', authMiddleware, async (req, res) => {
     try {
         const content = await Content.findById(req.params.id);
         if (!content) return res.status(404).json({ error: 'Content not found' });
         const userPlan = req.user.subscription.plan || 'free';
         const userStatus = req.user.subscription.status || 'none';
-        
-        if (content.accessLevel !== 'free' && userStatus !== 'active') {
-            return res.status(403).json({ error: '⏳ Your subscription is pending approval. Please wait for admin verification.' });
-        }
-        if (!checkAccessLevel(userPlan, content.accessLevel)) {
-            return res.status(403).json({ error: '🔒 Subscribe to ' + content.accessLevel.toUpperCase() + ' plan to download!' });
-        }
-        
+        if (content.accessLevel !== 'free' && userStatus !== 'active') { return res.status(403).json({ error: '⏳ Your subscription is pending approval. Please wait for admin verification.' }); }
+        if (!checkAccessLevel(userPlan, content.accessLevel)) { return res.status(403).json({ error: '🔒 Subscribe to ' + content.accessLevel.toUpperCase() + ' plan to download!' }); }
         const userId = req.user.id;
         let alreadyDownloaded = content.downloadedBy && content.downloadedBy.some(d => d.userId && d.userId.toString() === userId.toString());
         if (!alreadyDownloaded) {
@@ -465,7 +429,7 @@ app.post('/api/subscribe', authMiddleware, upload.single('paymentScreenshot'), a
         await User.findByIdAndUpdate(req.user._id, { 'subscription.status': 'pending', 'subscription.plan': plan, 'subscription.duration': duration });
         req.user.notifications.push({ message: '💳 Payment submitted! Waiting for admin approval.', type: 'subscription' });
         await req.user.save();
-        res.json({ success: true, message: '✅ Payment submitted! Admin will verify within 24 hours. You will NOT have access until approved.', transaction: txn });
+        res.json({ success: true, message: '✅ Payment submitted! Admin will verify within 24 hours.', transaction: txn });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -493,7 +457,6 @@ app.post('/api/admin/upload', authMiddleware, adminMiddleware, upload.fields([{ 
 app.put('/api/admin/contents/:id', authMiddleware, adminMiddleware, async (req, res) => { const c = await Content.findByIdAndUpdate(req.params.id, { ...req.body, updatedAt: new Date() }, { new: true }); if (!c) return res.status(404).json({ error: 'Not found' }); res.json({ success: true, content: c }); });
 app.delete('/api/admin/contents/:id', authMiddleware, adminMiddleware, async (req, res) => { await Content.findByIdAndDelete(req.params.id); res.json({ success: true }); });
 
-// Add Part - FIXED
 app.post('/api/admin/movies/:id/part', authMiddleware, adminMiddleware, upload.single('video'), async (req, res) => {
     try {
         const c = await Content.findById(req.params.id);
@@ -510,7 +473,6 @@ app.post('/api/admin/movies/:id/part', authMiddleware, adminMiddleware, upload.s
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Add Episode - FIXED
 app.post('/api/admin/series/:id/episode', authMiddleware, adminMiddleware, upload.single('video'), async (req, res) => {
     try {
         const c = await Content.findById(req.params.id);
@@ -529,11 +491,8 @@ app.post('/api/admin/series/:id/episode', authMiddleware, adminMiddleware, uploa
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Subscriptions with archive
 app.get('/api/admin/subscriptions', authMiddleware, adminMiddleware, async (req, res) => {
-    const { status } = req.query;
-    let query = {};
-    if (status) query.status = status;
+    const { status } = req.query; let query = {}; if (status) query.status = status;
     const transactions = await Transaction.find(query).sort({ createdAt: -1 });
     const pendingCount = await Transaction.countDocuments({ status: 'pending' });
     const archivedCount = await Transaction.countDocuments({ status: 'archived' });
@@ -546,7 +505,6 @@ app.put('/api/admin/subscriptions/:id', authMiddleware, adminMiddleware, async (
     const txn = await Transaction.findById(req.params.id);
     if (!txn) return res.status(404).json({ error: 'Not found' });
     txn.status = status; txn.adminNote = adminNote || ''; txn.processedBy = req.user.email; txn.processedAt = new Date(); await txn.save();
-    
     const user = await User.findById(txn.userId);
     if (status === 'approved') {
         const days = { weekly: 7, monthly: 30, quarterly: 90, yearly: 365 };
@@ -555,30 +513,17 @@ app.put('/api/admin/subscriptions/:id', authMiddleware, adminMiddleware, async (
         if (user) {
             user.notifications.push({ message: '✅ Your ' + txn.plan.toUpperCase() + ' subscription has been APPROVED! Enjoy streaming! 🎬', type: 'success' });
             await user.save();
-            sendEmail(user.email, '✅ Subscription Approved!',
-                '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif">' +
-                '<h1 style="color:#4CAF50">✅ Subscription Approved!</h1>' +
-                '<h2>Your ' + txn.plan.toUpperCase() + ' plan is now active!</h2>' +
-                '<p>Duration: ' + txn.duration + '</p>' +
-                '<p>Expires: ' + exp.toLocaleDateString() + '</p>' +
-                '<p style="color:#b3b3b3">Enjoy unlimited streaming! 🍿</p>' +
-                '<a href="http://localhost:3000" style="background:#E53935;color:#fff;padding:1rem 2rem;border-radius:30px;text-decoration:none">Start Watching</a></div>'
-            );
+            sendEmail(user.email, '✅ Subscription Approved!', '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif"><h1 style="color:#4CAF50">✅ Subscription Approved!</h1><h2>Your ' + txn.plan.toUpperCase() + ' plan is now active!</h2><p>Duration: ' + txn.duration + '</p><p>Expires: ' + exp.toLocaleDateString() + '</p><p style="color:#b3b3b3">Enjoy unlimited streaming! 🍿</p></div>');
         }
         res.json({ success: true, message: '✅ Approved! User notified.' });
     } else if (status === 'rejected') {
         await User.findByIdAndUpdate(txn.userId, { 'subscription.status': 'none', 'subscription.plan': 'free', 'subscription.duration': 'none' });
-        if (user) {
-            user.notifications.push({ message: '❌ Your subscription was rejected. Reason: ' + (adminNote || 'No reason provided'), type: 'warning' });
-            await user.save();
-        }
+        if (user) { user.notifications.push({ message: '❌ Your subscription was rejected. Reason: ' + (adminNote || 'No reason provided'), type: 'warning' }); await user.save(); }
         res.json({ success: true, message: '❌ Rejected.' });
     } else if (status === 'archived') {
         if (user) { user.notifications.push({ message: '📦 Your subscription has been archived.', type: 'system' }); await user.save(); }
         res.json({ success: true, message: '📦 Archived.' });
-    } else {
-        res.json({ success: true, message: '✅ Updated.' });
-    }
+    } else { res.json({ success: true, message: '✅ Updated.' }); }
 });
 
 app.get('/api/admin/flagged-users', authMiddleware, adminMiddleware, async (req, res) => { res.json(await User.find({ isFlagged: true }).select('-password')); });
@@ -605,17 +550,19 @@ app.get('/api/mylist', authMiddleware, async (req, res) => { const user = await 
 
 // ========== PROXY STREAM ROUTE ==========
 app.get('/stream/:id', async (req, res) => { try { const content = await Content.findById(req.params.id); if (!content) return res.status(404).send('Content not found'); const partIndex = parseInt(req.query.part) || 0; let videoUrl = ''; if (content.type === 'movie' && content.parts && content.parts.length > partIndex) { videoUrl = content.parts[partIndex].videoUrl; } else if (content.type === 'series' && content.seasons) { const seasonIndex = parseInt(req.query.season) || 0; const episodeIndex = parseInt(req.query.episode) || 0; if (content.seasons[seasonIndex] && content.seasons[seasonIndex].episodes && content.seasons[seasonIndex].episodes[episodeIndex]) { videoUrl = content.seasons[seasonIndex].episodes[episodeIndex].videoUrl; } } if (!videoUrl) return res.status(404).send('No video URL found'); if (videoUrl.includes('pixeldrain.com/u/')) { videoUrl = videoUrl.replace('pixeldrain.com/u/', 'pixeldrain.com/api/file/'); } if (videoUrl.startsWith('/uploads/')) { return res.redirect(videoUrl); } res.redirect(videoUrl); } catch (err) { console.error('Stream error:', err); res.status(500).send('Streaming error'); } });
-// ========== CLEAN URL ROUTES ==========
-app.get('/', (req, res) => { 
-    res.sendFile(path.join(__dirname, 'public', 'index.html')); 
-});
-app.get('/admin', (req, res) => { const token = req.query.token; if (!token) return res.sendFile(path.join(__dirname, 'public', 'admin-login.html')); try { jwt.verify(token, process.env.JWT_SECRET || 'agnews_final_secret_2026'); res.sendFile(path.join(__dirname, 'public', 'admin.html')); } catch (err) { res.sendFile(path.join(__dirname, 'public', 'admin-login.html')); } });
-app.get('/admin-login', (req, res) => { res.sendFile(path.join(__dirname, 'public', 'admin-login.html')); });
+
+// ========== CLEAN URL ROUTES (FIXED FOR RAILWAY) ==========
+const publicPath = path.join(__dirname, 'public');
+app.use(express.static(publicPath));
+app.get('/', (req, res) => { res.sendFile(path.join(publicPath, 'index.html')); });
+app.get('/admin', (req, res) => { const token = req.query.token; if (!token) return res.sendFile(path.join(publicPath, 'admin-login.html')); try { jwt.verify(token, process.env.JWT_SECRET || 'agnews_final_secret_2026'); res.sendFile(path.join(publicPath, 'admin.html')); } catch (err) { res.sendFile(path.join(publicPath, 'admin-login.html')); } });
+app.get('/admin-login', (req, res) => { res.sendFile(path.join(publicPath, 'admin-login.html')); });
 app.get('/admin.html', (req, res) => { res.redirect('/admin-login'); });
 app.get('/index.html', (req, res) => { res.redirect('/'); });
-app.use(express.static(path.join(__dirname, 'public')));
+app.get('*', (req, res) => { res.sendFile(path.join(publicPath, 'index.html')); });
+
 // ========== START ==========
 createAdmins().then(() => {
     const PORT = process.env.PORT || 3000;
-    app.listen(PORT, () => { console.log('\n🎬 AGASOBANUYE MOVIES | AGNEWS\n📍 http://localhost:' + PORT + '\n👑 Admin: agasobanuyenews@gmail.com / Joselove@250\n📧 Email: ' + (process.env.EMAIL_USER || 'Not configured') + '\n'); });
+    app.listen(PORT, '0.0.0.0', () => { console.log('\n🎬 AGASOBANUYE MOVIES | AGNEWS\n📍 http://localhost:' + PORT + '\n👑 Admin: agasobanuyenews@gmail.com / Joselove@250\n📧 Email: ' + (process.env.EMAIL_USER || 'Not configured') + '\n'); });
 });
