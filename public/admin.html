@@ -154,7 +154,7 @@
 </div>
 
 <script>
-var API='http://localhost:3000/api';
+var API='/api';
 var token=localStorage.getItem('token'),currentAdmin=null,isHeadAdmin=false,allContents=[],currentEditId=null,currentSubFilter='pending';
 
 function showMsg(msg,isErr){var el=document.getElementById(isErr?'errorMsg':'successMsg');el.textContent=msg;el.style.display='block';setTimeout(function(){el.style.display='none'},4000)}
