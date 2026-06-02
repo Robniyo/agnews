@@ -40,7 +40,7 @@ async function sendEmail(to, subject, html) {
     try {
         if (!process.env.EMAIL_PASS) { console.log('Email not configured, skipping'); return false; }
         await transporter.sendMail({
-            from: '"AGASOBANUYE MOVIES" <' + (process.env.EMAIL_USER || 'ad52a6001@smtp-brevo.com') + '>',
+            from: '"AGASOBANUYE MOVIES" <agasobanuyenews@gmail.com>',
             to: to, subject: subject, html: html
         });
         console.log('Email sent to ' + to);
