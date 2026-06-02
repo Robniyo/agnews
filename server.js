@@ -29,20 +29,35 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/agnews')
 
 async function sendEmail(to, subject, html) {
     try {
-        if (!process.env.EMAIL_PASS) { console.log('Email not configured, skipping'); return false; }
-        const response = await fetch('https://api.resend.com/emails', {
+        if (!process.env.EMAIL_PASS || !process.env.EMAIL_USER) { console.log('Email not configured'); return false; }
+        const response = await fetch('https://api.mailjet.com/v3.1/send', {
             method: 'POST',
             headers: {
-                'Authorization': 'Bearer ' + process.env.EMAIL_PASS,
+                'Authorization': 'Basic ' + Buffer.from(process.env.EMAIL_USER + ':' + process.env.EMAIL_PASS).toString('base64'),
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                from: 'AGASOBANUYE MOVIES <onboarding@resend.dev>',
-                to: to,
-                subject: subject,
-                html: html
+                Messages: [{
+                    From: { Email: 'agasobanuyenews@gmail.com', Name: 'AGASOBANUYE MOVIES' },
+                    To: [{ Email: to }],
+                    Subject: subject,
+                    HTMLPart: html
+                }]
             })
         });
+        const data = await response.json();
+        if (response.ok && data.Messages[0].Status === 'success') {
+            console.log('Email sent to ' + to);
+            return true;
+        } else {
+            console.log('Email failed:', JSON.stringify(data));
+            return false;
+        }
+    } catch (err) {
+        console.log('Email error:', err.message);
+        return false;
+    }
+}
         const data = await response.json();
         if (response.ok) {
             console.log('Email sent to ' + to);
