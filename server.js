@@ -78,7 +78,7 @@ const UserSchema = new mongoose.Schema({
     fullName: { type: String, default: '' },
     phone: { type: String, default: '' },
     role: { type: String, enum: ['user', 'admin'], default: 'user' },
-    isEmailVerified: { type: Boolean, default: false },
+    isEmailVerified: { type: Boolean, default: true },
     emailVerificationCode: String,
     emailVerificationExpires: Date,
     subscription: {
@@ -253,17 +253,18 @@ app.post('/api/register', async (req, res) => {
         const verificationExpires = new Date(Date.now() + 30 * 60 * 1000);
         const user = await User.create({
             email, password: await bcrypt.hash(password, 10), fullName: fullName || 'Movie Lover 🍿', phone: phone || '',
-            isEmailVerified: false, emailVerificationCode: verificationCode, emailVerificationExpires: verificationExpires,
+            isEmailVerified: true, emailVerificationCode: verificationCode, emailVerificationExpires: verificationExpires,
             subscription: { plan: 'free', duration: 'none', startDate: new Date(), status: 'active', maxDevices: 6 },
-            notifications: [{ message: '🎉 Welcome to AGASOBANUYE MOVIES! Please verify your email.', type: 'system' }]
+            notifications: [{ message: '🎉 Welcome to AGASOBANUYE MOVIES! Enjoy streaming! 🍿', type: 'system' }]
         });
-        sendEmail(email, 'Verify Your AGNEWS Account - Code: ' + verificationCode,
+        sendEmail(email, 'Welcome to AGASOBANUYE MOVIES! 🎬',
             '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif">' +
             '<h1 style="color:#E53935">🎬 AGASOBANUYE MOVIES</h1><h2>Welcome ' + (fullName || 'Movie Lover') + '! 🍿</h2>' +
-            '<p>Your verification code is:</p><h1 style="color:#FFC107;font-size:3rem;letter-spacing:5px">' + verificationCode + '</h1>' +
-            '<p>Enter this code on the verification page.</p><p style="color:#b3b3b3">Code expires in 30 minutes.</p></div>');
+            '<p>Your account has been created successfully!</p>' +
+            '<p>Verification code: <b>' + verificationCode + '</b> (only needed for subscriptions)</p>' +
+            '<p style="color:#b3b3b3">📞 Need help? +250 795 064 502</p></div>');
         const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET || 'agnews_final_secret_2026');
-        res.status(201).json({ token, user: { id: user._id, email, role: user.role, fullName: user.fullName, subscription: user.subscription, isEmailVerified: false }, message: '🎉 Account created! Please check your email for verification code.' });
+        res.status(201).json({ token, user: { id: user._id, email, role: user.role, fullName: user.fullName, subscription: user.subscription, isEmailVerified: true }, message: '🎉 Account created! Welcome! 🍿' });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -459,6 +460,7 @@ app.delete('/api/admin/contents/:id', authMiddleware, adminMiddleware, async (re
 
 app.post('/api/admin/movies/:id/part', authMiddleware, adminMiddleware, upload.single('video'), async (req, res) => {
     try {
+        console.log('Add Part Request:', req.params.id, req.body);
         const c = await Content.findById(req.params.id);
         if (!c || c.type !== 'movie') return res.status(400).json({ error: 'Movie not found' });
         const { partNumber, partTitle, videoSource, externalLink } = req.body;
@@ -469,12 +471,14 @@ app.post('/api/admin/movies/:id/part', authMiddleware, adminMiddleware, upload.s
         c.parts.push({ partNumber: partNumber || String(c.parts.length + 1), title: partTitle || 'Part ' + (c.parts.length + 1), videoUrl, videoSource: videoSource || 'external' });
         c.updatedAt = new Date();
         await c.save();
+        console.log('Part added successfully:', videoUrl);
         res.json({ success: true, content: c, message: '✅ Part added!' });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { console.error('Add Part Error:', err); res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/admin/series/:id/episode', authMiddleware, adminMiddleware, upload.single('video'), async (req, res) => {
     try {
+        console.log('Add Episode Request:', req.params.id, req.body);
         const c = await Content.findById(req.params.id);
         if (!c || c.type !== 'series') return res.status(400).json({ error: 'Series not found' });
         const { seasonNumber, episodeNumber, episodeTitle, videoSource, externalLink } = req.body;
@@ -487,8 +491,9 @@ app.post('/api/admin/series/:id/episode', authMiddleware, adminMiddleware, uploa
         season.episodes.push({ episodeNumber: parseInt(episodeNumber) || season.episodes.length + 1, title: episodeTitle || 'Episode ' + (season.episodes.length + 1), videoUrl, videoSource: videoSource || 'external' });
         c.updatedAt = new Date();
         await c.save();
+        console.log('Episode added successfully:', videoUrl);
         res.json({ success: true, content: c, message: '✅ Episode added!' });
-    } catch (err) { res.status(500).json({ error: err.message }); }
+    } catch (err) { console.error('Add Episode Error:', err); res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/admin/subscriptions', authMiddleware, adminMiddleware, async (req, res) => {
@@ -537,7 +542,7 @@ app.post('/api/admin/ads', authMiddleware, adminMiddleware, upload.single('adMed
 app.put('/api/admin/ads/:id', authMiddleware, adminMiddleware, async (req, res) => { await Ad.findByIdAndUpdate(req.params.id, { ...req.body, updatedAt: new Date() }); res.json({ success: true }); });
 app.delete('/api/admin/ads/:id', authMiddleware, adminMiddleware, async (req, res) => { await Ad.findByIdAndDelete(req.params.id); res.json({ success: true }); });
 
-app.get('/api/admin/payments', authMiddleware, adminMiddleware, async (req, res) => { const transactions = await Transaction.find({ status: 'approved' }).sort({ createdAt: -1 }); const totalRevenue = transactions.reduce((s, t) => s + (t.amount || 0), 0); const withdrawals = await Withdrawal.find(); const totalWithdrawn = withdrawals.filter(w => w.status === 'completed').reduce((s, w) => s + (w.amount || 0), 0); const subscribers = await User.find({ 'subscription.status': 'active', 'subscription.expiresAt': { $gt: new Date() } }); res.json({ transactions, totalRevenue, totalWithdrawn, availableBalance: totalRevenue - totalWithdrawn, activeSubscribers: subscribers.length, subscribers }); });
+app.get('/api/admin/payments', authMiddleware, adminMiddleware, async (req, res) => { const transactions = await Transaction.find({ status: 'approved' }).sort({ createdAt: -1 }); const totalRevenue = transactions.reduce((s, t) => s + (t.amount || 0), 0); const withdrawals = await Withdrawal.find(); const totalWithdrawn = withdrawals.filter(w => w.status === 'completed').reduce((s, w) => s + (w.amount || 0), 0); const subscribers = await User.find({ role: 'user', 'subscription.status': 'active', 'subscription.expiresAt': { $gt: new Date() } }); res.json({ transactions, totalRevenue, totalWithdrawn, availableBalance: totalRevenue - totalWithdrawn, activeSubscribers: subscribers.length, subscribers }); });
 app.post('/api/admin/withdraw', authMiddleware, adminMiddleware, async (req, res) => { const { amount, bankName, accountNumber, accountName } = req.body; const w = await Withdrawal.create({ amount, bankDetails: { bankName, accountNumber, accountName }, requestedBy: req.user._id, requestedByEmail: req.user.email, requestedByName: req.user.fullName }); res.json({ success: true, withdrawal: w }); });
 app.get('/api/admin/withdrawals', authMiddleware, adminMiddleware, async (req, res) => { res.json(await Withdrawal.find().sort({ createdAt: -1 })); });
 app.put('/api/admin/withdrawals/:id', authMiddleware, headAdminMiddleware, async (req, res) => { await Withdrawal.findByIdAndUpdate(req.params.id, { status: req.body.status, completedAt: new Date(), processedBy: req.user.fullName }); res.json({ success: true }); });
@@ -548,7 +553,7 @@ app.delete('/api/mylist/:contentId', authMiddleware, async (req, res) => { const
 app.get('/api/mylist', authMiddleware, async (req, res) => { const user = await User.findById(req.user.id).populate('myList'); res.json(user.myList || []); });
 
 // ========== PROXY STREAM ROUTE ==========
-app.get('/stream/:id', async (req, res) => { try { const content = await Content.findById(req.params.id); if (!content) return res.status(404).send('Content not found'); const partIndex = parseInt(req.query.part) || 0; let videoUrl = ''; if (content.type === 'movie' && content.parts && content.parts.length > partIndex) { videoUrl = content.parts[partIndex].videoUrl; } else if (content.type === 'series' && content.seasons) { const seasonIndex = parseInt(req.query.season) || 0; const episodeIndex = parseInt(req.query.episode) || 0; if (content.seasons[seasonIndex] && content.seasons[seasonIndex].episodes && content.seasons[seasonIndex].episodes[episodeIndex]) { videoUrl = content.seasons[seasonIndex].episodes[episodeIndex].videoUrl; } } if (!videoUrl) return res.status(404).send('No video URL found'); if (videoUrl.includes('pixeldrain.com/u/')) { videoUrl = videoUrl.replace('pixeldrain.com/u/', 'pixeldrain.com/api/file/'); } if (videoUrl.startsWith('/uploads/')) { return res.redirect(videoUrl); } res.redirect(videoUrl); } catch (err) { console.error('Stream error:', err); res.status(500).send('Streaming error'); } });
+app.get('/stream/:id', async (req, res) => { try { const content = await Content.findById(req.params.id); if (!content) return res.status(404).send('Content not found'); const partIndex = parseInt(req.query.part) || 0; const seasonIndex = parseInt(req.query.season) || 0; const episodeIndex = parseInt(req.query.episode) || 0; let videoUrl = ''; if (content.type === 'movie' && content.parts && content.parts.length > partIndex) { videoUrl = content.parts[partIndex].videoUrl; } else if (content.type === 'series' && content.seasons && content.seasons[seasonIndex] && content.seasons[seasonIndex].episodes && content.seasons[seasonIndex].episodes[episodeIndex]) { videoUrl = content.seasons[seasonIndex].episodes[episodeIndex].videoUrl; } if (!videoUrl) return res.status(404).send('No video URL found'); if (videoUrl.includes('pixeldrain.com/u/')) { videoUrl = videoUrl.replace('pixeldrain.com/u/', 'pixeldrain.com/api/file/'); } if (videoUrl.startsWith('/uploads/')) { return res.redirect(videoUrl); } res.redirect(videoUrl); } catch (err) { console.error('Stream error:', err); res.status(500).send('Streaming error'); } });
 
 // ========== CLEAN URL ROUTES ==========
 const publicPath = path.join(__dirname, 'public');
