@@ -30,8 +30,8 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/agnews')
 // ========== EMAIL SETUP ==========
 const transporter = nodemailer.createTransport({
     host: 'smtp.resend.com',
-    port: 465,
-    secure: true,
+    port: 587,
+    secure: false,
     auth: {
         user: 'resend',
         pass: process.env.EMAIL_PASS || ''
