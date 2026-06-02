@@ -218,7 +218,9 @@ if(c.synopsis){document.getElementById('modalSynopsis').style.display='block';do
 if(c.trailerUrl){document.getElementById('trailerBanner').style.display='flex';document.getElementById('trailerVideo').src=c.trailerUrl}else{document.getElementById('trailerBanner').style.display='none';document.getElementById('modalTrailer').style.display='none'}
 var epList=document.getElementById('episodeList');var epContainer=document.getElementById('modalEpisodes');
 if(currentEpisodes.length>1){epContainer.style.display='block';epList.innerHTML=currentEpisodes.map(function(ep,i){return'<button class="btn btn-outline ep-btn'+(i===currentEpisodeIndex?' active':'')+'" onclick="playEpisode('+i+')">'+ep.label+'</button>'}).join('')}else{epContainer.style.display='none'}
-document.getElementById('downloadBtn').onclick=async function(){if(!currentUser){showMessage('Login Required','Please login to download');return}var r=await fetchAuth('/contents/'+id+'/download',{method:'POST'});if(r.downloadUrl){var a=document.createElement('a');a.href=r.downloadUrl;a.download='';a.target='_blank';document.body.appendChild(a);a.click();document.body.removeChild(a)}else{showMessage('Error',r.error||'Cannot download')}loadAllContent()};
+document.getElementById('downloadBtn').onclick=async function(){
+var c=allContents.find(function(x){return x._id===currentContentId});
+if(c&&c.accessLevel!=='free'&&!currentUser){showMessage('Login Required','Please login to download');return}
 document.getElementById('movieModal').style.display='flex';
 var vid=document.getElementById('modalVideo');vid.onended=function(){if(currentEpisodes.length>1&&currentEpisodeIndex<currentEpisodes.length-1){currentEpisodeIndex++;vid.src=currentEpisodes[currentEpisodeIndex].url;vid.play();updateEpisodeButtons()}};
 updateMyListButton();loadComments(id);loadRelated(id,c);await fetch(API+'/contents/'+id);loadAllContent()}
