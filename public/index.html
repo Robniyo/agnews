@@ -221,6 +221,8 @@ if(currentEpisodes.length>1){epContainer.style.display='block';epList.innerHTML=
 document.getElementById('downloadBtn').onclick=async function(){
 var c=allContents.find(function(x){return x._id===currentContentId});
 if(c&&c.accessLevel!=='free'&&!currentUser){showMessage('Login Required','Please login to download');return}
+var r=await fetchAuth('/contents/'+id+'/download',{method:'POST'});
+if(r.downloadUrl){var a=document.createElement('a');a.href=r.downloadUrl;a.download='';a.target='_blank';document.body.appendChild(a);a.click();document.body.removeChild(a)}else{showMessage('Error',r.error||'Cannot download')}loadAllContent()};
 document.getElementById('movieModal').style.display='flex';
 var vid=document.getElementById('modalVideo');vid.onended=function(){if(currentEpisodes.length>1&&currentEpisodeIndex<currentEpisodes.length-1){currentEpisodeIndex++;vid.src=currentEpisodes[currentEpisodeIndex].url;vid.play();updateEpisodeButtons()}};
 updateMyListButton();loadComments(id);loadRelated(id,c);await fetch(API+'/contents/'+id);loadAllContent()}
