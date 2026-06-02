@@ -221,10 +221,10 @@ if(currentEpisodes.length>1){epContainer.style.display='block';epList.innerHTML=
 document.getElementById('downloadBtn').onclick=async function(){
 var c=allContents.find(function(x){return x._id===currentContentId});
 if(!c)return;
-if(c.accessLevel==='free'){var vu=currentEpisodes.length>0?currentEpisodes[currentEpisodeIndex].url:(c.parts&&c.parts[0]?c.parts[0].videoUrl:'');if(vu){var aa=document.createElement('a');aa.href=vu;aa.download='';aa.target='_blank';document.body.appendChild(aa);aa.click();document.body.removeChild(aa)}return}
+if(c.accessLevel==='free'){var vu=currentEpisodes.length>0?currentEpisodes[currentEpisodeIndex].url:(c.parts&&c.parts[0]?c.parts[0].videoUrl:'');if(vu){if(vu.includes('pixeldrain.com/u/')){vu=vu.replace('pixeldrain.com/u/','pixeldrain.com/api/file/');}if(vu.includes('pixeldrain.com/api/file/')&&vu.indexOf('?download')===-1){vu=vu+'?download';}var aa=document.createElement('a');aa.href=vu;aa.download='';aa.target='_blank';document.body.appendChild(aa);aa.click();document.body.removeChild(aa)}return}
 if(!currentUser){showMessage('Login Required','Please login to download');return}
 var r=await fetchAuth('/contents/'+id+'/download',{method:'POST'});
-if(r.downloadUrl){var a=document.createElement('a');a.href=r.downloadUrl;a.download='';a.target='_blank';document.body.appendChild(a);a.click();document.body.removeChild(a)}else{showMessage('Error',r.error||'Cannot download')}loadAllContent()};
+if(r.downloadUrl){var dl=r.downloadUrl;if(dl.includes('pixeldrain.com/u/')){dl=dl.replace('pixeldrain.com/u/','pixeldrain.com/api/file/');}if(dl.includes('pixeldrain.com/api/file/')&&dl.indexOf('?download')===-1){dl=dl+'?download';}var a=document.createElement('a');a.href=dl;a.download='';a.target='_blank';document.body.appendChild(a);a.click();document.body.removeChild(a)}else{showMessage('Error',r.error||'Cannot download')}loadAllContent()};
 document.getElementById('movieModal').style.display='flex';
 var vid=document.getElementById('modalVideo');vid.onended=function(){if(currentEpisodes.length>1&&currentEpisodeIndex<currentEpisodes.length-1){currentEpisodeIndex++;vid.src=currentEpisodes[currentEpisodeIndex].url;vid.play();updateEpisodeButtons()}};
 updateMyListButton();loadComments(id);loadRelated(id,c);await fetch(API+'/contents/'+id);loadAllContent()}
