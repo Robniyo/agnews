@@ -220,13 +220,14 @@ var epList=document.getElementById('episodeList');var epContainer=document.getEl
 if(currentEpisodes.length>1){epContainer.style.display='block';epList.innerHTML=currentEpisodes.map(function(ep,i){return'<button class="btn btn-outline ep-btn'+(i===currentEpisodeIndex?' active':'')+'" onclick="playEpisode('+i+')">'+ep.label+'</button>'}).join('')}else{epContainer.style.display='none'}
 document.getElementById('downloadBtn').onclick=async function(){
 var c=allContents.find(function(x){return x._id===currentContentId});
-if(c&&c.accessLevel!=='free'&&!currentUser){showMessage('Login Required','Please login to download');return}
+if(!c)return;
+if(c.accessLevel==='free'){var vu=currentEpisodes.length>0?currentEpisodes[currentEpisodeIndex].url:(c.parts&&c.parts[0]?c.parts[0].videoUrl:'');if(vu){var aa=document.createElement('a');aa.href=vu;aa.download='';aa.target='_blank';document.body.appendChild(aa);aa.click();document.body.removeChild(aa)}return}
+if(!currentUser){showMessage('Login Required','Please login to download');return}
 var r=await fetchAuth('/contents/'+id+'/download',{method:'POST'});
 if(r.downloadUrl){var a=document.createElement('a');a.href=r.downloadUrl;a.download='';a.target='_blank';document.body.appendChild(a);a.click();document.body.removeChild(a)}else{showMessage('Error',r.error||'Cannot download')}loadAllContent()};
 document.getElementById('movieModal').style.display='flex';
 var vid=document.getElementById('modalVideo');vid.onended=function(){if(currentEpisodes.length>1&&currentEpisodeIndex<currentEpisodes.length-1){currentEpisodeIndex++;vid.src=currentEpisodes[currentEpisodeIndex].url;vid.play();updateEpisodeButtons()}};
 updateMyListButton();loadComments(id);loadRelated(id,c);await fetch(API+'/contents/'+id);loadAllContent()}
-
 function playEpisode(index){currentEpisodeIndex=index;var vid=document.getElementById('modalVideo');vid.src=currentEpisodes[index].url;vid.play();updateEpisodeButtons()}
 function updateEpisodeButtons(){var btns=document.querySelectorAll('.ep-btn');btns.forEach(function(b,i){b.classList.toggle('active',i===currentEpisodeIndex)})}
 function loadRelated(id,c){var r=allContents.filter(function(x){return x._id!==id&&(x.category===c.category||x.accessLevel===c.accessLevel)}).slice(0,8);var items=r.length?r:allContents.filter(function(x){return x._id!==id}).slice(0,8);var ct=document.getElementById('relatedMovies');if(!ct||!items.length)return;ct.innerHTML=items.map(function(m){return'<div class="related-card" onclick="closeModal(\'movieModal\');openContent(\''+m._id+'\')"><img class="related-thumb" src="'+(m.thumbnailUrl||'')+'" onerror="this.style.background=\'var(--bg3)\'"><div class="movie-info"><div class="movie-title">'+escHtml(m.title)+'</div></div></div>'}).join('')}
