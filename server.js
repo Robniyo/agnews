@@ -224,34 +224,20 @@ const checkAccessLevel = (userPlan, contentAccessLevel) => {
     return (planLevels[userPlan] || 0) >= (planLevels[contentAccessLevel] || 0);
 };
 
-// Helper: Convert Pixeldrain URL to direct API URL
-function convertPixeldrainUrl(url) {
-    if (!url) return '';
-    if (url.includes('pixeldrain.com/u/')) {
-        url = url.replace('pixeldrain.com/u/', 'pixeldrain.com/api/file/');
-    }
-    if (url.includes('pixeldrain.com/l/')) {
-        url = url.replace('pixeldrain.com/l/', 'pixeldrain.com/api/file/');
-    }
-    return url;
-}
-
-// Helper: Get streaming URL
+// Helper: Get streaming URL - send user to Pixeldrain page (not API)
 function getStreamUrl(url) {
     if (!url) return '';
-    return convertPixeldrainUrl(url);
-}
-
-// Helper: Get download URL
-function getDownloadUrl(url) {
-    if (!url) return '';
-    url = convertPixeldrainUrl(url);
-    if (url.includes('pixeldrain.com/api/file/') && !url.includes('?download')) {
-        url = url + '?download';
-    }
+    // Keep the /u/ page link - users view on Pixeldrain's site
+    // This avoids hotlinking detection
     return url;
 }
 
+// Helper: Get download URL - send user to Pixeldrain page
+function getDownloadUrl(url) {
+    if (!url) return '';
+    // Keep the /u/ page link - Pixeldrain has download button on their page
+    return url;
+}
 // ========== CREATE ADMINS ==========
 async function createAdmins() {
     const admins = [
