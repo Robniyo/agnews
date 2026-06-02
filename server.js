@@ -27,31 +27,35 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/agnews')
     .then(() => console.log('MongoDB Connected'))
     .catch(err => console.log('MongoDB Error:', err));
 
-// ========== EMAIL SETUP ==========
-const transporter = nodemailer.createTransport({
-    host: 'smtp.resend.com',
-    port: 587,
-    secure: false,
-    auth: {
-        user: 'resend',
-        pass: process.env.EMAIL_PASS || ''
-    }
-});
 async function sendEmail(to, subject, html) {
     try {
         if (!process.env.EMAIL_PASS) { console.log('Email not configured, skipping'); return false; }
-        await transporter.sendMail({
-            from: '"AGASOBANUYE MOVIES" <onboarding@resend.dev>',
-            to: to, subject: subject, html: html
+        const response = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+                'Authorization': 'Bearer ' + process.env.EMAIL_PASS,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                from: 'AGASOBANUYE MOVIES <onboarding@resend.dev>',
+                to: to,
+                subject: subject,
+                html: html
+            })
         });
-        console.log('Email sent to ' + to);
-        return true;
+        const data = await response.json();
+        if (response.ok) {
+            console.log('Email sent to ' + to);
+            return true;
+        } else {
+            console.log('Email failed:', JSON.stringify(data));
+            return false;
+        }
     } catch (err) {
-        console.log('Email failed:', err.message, err.code);
+        console.log('Email error:', err.message);
         return false;
     }
 }
-
 // ========== MODELS ==========
 const DeviceSchema = new mongoose.Schema({
     deviceId: String, deviceName: String, ipAddress: String,
