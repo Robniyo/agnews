@@ -8,7 +8,7 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const nodemailer = require('nodemailer');
+//const nodemailer = require('nodemailer');
 
 const app = express();
 
