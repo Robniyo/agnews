@@ -29,10 +29,15 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/agnews')
 
 // ========== EMAIL SETUP ==========
 const transporter = nodemailer.createTransport({
-    service: 'gmail',
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false,
     auth: {
         user: process.env.EMAIL_USER || 'agasobanuyenews@gmail.com',
         pass: process.env.EMAIL_PASS || ''
+    },
+    tls: {
+        rejectUnauthorized: false
     }
 });
 
@@ -46,7 +51,7 @@ async function sendEmail(to, subject, html) {
         console.log('Email sent to ' + to);
         return true;
     } catch (err) {
-        console.log('Email failed:', err.message);
+        console.log('Email failed:', err.message, err.code);
         return false;
     }
 }
