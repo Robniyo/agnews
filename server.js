@@ -78,7 +78,7 @@ const UserSchema = new mongoose.Schema({
     fullName: { type: String, default: '' },
     phone: { type: String, default: '' },
     role: { type: String, enum: ['user', 'admin'], default: 'user' },
-    isEmailVerified: { type: Boolean, default: true },
+    isEmailVerified: { type: Boolean, default: false },
     emailVerificationCode: String,
     emailVerificationExpires: Date,
     subscription: {
@@ -99,12 +99,14 @@ const User = mongoose.model('User', UserSchema);
 const PartSchema = new mongoose.Schema({
     partNumber: String, title: String, videoUrl: String,
     videoSource: { type: String, enum: ['upload', 'external', 'pixeldrain'], default: 'external' },
+    accessLevel: { type: String, enum: ['free', 'basic', 'standard', 'premium', 'ultimate'], default: 'free' },
     views: { type: Number, default: 0 }, downloads: { type: Number, default: 0 }
 });
 
 const EpisodeSchema = new mongoose.Schema({
     episodeNumber: Number, title: String, description: String, videoUrl: String,
     videoSource: { type: String, enum: ['upload', 'external', 'pixeldrain'], default: 'external' },
+    accessLevel: { type: String, enum: ['free', 'basic', 'standard', 'premium', 'ultimate'], default: 'free' },
     views: { type: Number, default: 0 }, downloads: { type: Number, default: 0 }
 });
 
@@ -227,17 +229,15 @@ const checkAccessLevel = (userPlan, contentAccessLevel) => {
 // Helper: Get streaming URL - send user to Pixeldrain page (not API)
 function getStreamUrl(url) {
     if (!url) return '';
-    // Keep the /u/ page link - users view on Pixeldrain's site
-    // This avoids hotlinking detection
     return url;
 }
 
 // Helper: Get download URL - send user to Pixeldrain page
 function getDownloadUrl(url) {
     if (!url) return '';
-    // Keep the /u/ page link - Pixeldrain has download button on their page
     return url;
 }
+
 // ========== CREATE ADMINS ==========
 async function createAdmins() {
     const admins = [
@@ -267,18 +267,19 @@ app.post('/api/register', async (req, res) => {
         const verificationExpires = new Date(Date.now() + 30 * 60 * 1000);
         const user = await User.create({
             email, password: await bcrypt.hash(password, 10), fullName: fullName || 'Movie Lover', phone: phone || '',
-            isEmailVerified: true, emailVerificationCode: verificationCode, emailVerificationExpires: verificationExpires,
+            isEmailVerified: false, emailVerificationCode: verificationCode, emailVerificationExpires: verificationExpires,
             subscription: { plan: 'free', duration: 'none', startDate: new Date(), status: 'active', maxDevices: 6 },
-            notifications: [{ message: 'Welcome to AGASOBANUYE MOVIES! Enjoy streaming!', type: 'system' }]
+            notifications: [{ message: 'Welcome to AGASOBANUYE MOVIES! Verify your email to subscribe.', type: 'system' }]
         });
-        sendEmail(email, 'Welcome to AGASOBANUYE MOVIES!',
+        // Send verification email immediately on registration
+        sendEmail(email, 'Verify Your Email - AGASOBANUYE MOVIES',
             '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif">' +
             '<h1 style="color:#E53935">AGASOBANUYE MOVIES</h1><h2>Welcome ' + (fullName || 'Movie Lover') + '!</h2>' +
-            '<p>Your account has been created successfully!</p>' +
-            '<p>Verification code: <b>' + verificationCode + '</b> (only needed for subscriptions)</p>' +
-            '<p style="color:#b3b3b3">Need help? +250 795 064 502</p></div>');
+            '<p>Please verify your email to unlock subscriptions.</p>' +
+            '<h1 style="color:#FFC107;font-size:3rem;letter-spacing:5px">' + verificationCode + '</h1>' +
+            '<p style="color:#b3b3b3">Code expires in 30 minutes.</p></div>');
         const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET || 'agnews_final_secret_2026');
-        res.status(201).json({ token, user: { id: user._id, email, role: user.role, fullName: user.fullName, subscription: user.subscription, isEmailVerified: true }, message: 'Account created! Welcome!' });
+        res.status(201).json({ token, user: { id: user._id, email, role: user.role, fullName: user.fullName, subscription: user.subscription, isEmailVerified: false }, message: 'Account created! Please verify your email.', needsVerification: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -288,12 +289,28 @@ app.post('/api/verify-email', authMiddleware, async (req, res) => {
         const user = await User.findById(req.user.id);
         if (!user) return res.status(404).json({ error: 'User not found' });
         if (user.isEmailVerified) return res.json({ success: true, message: 'Email already verified!' });
+        if (!user.emailVerificationCode || !user.emailVerificationExpires) {
+            // Generate new code if none exists
+            const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+            user.emailVerificationCode = newCode;
+            user.emailVerificationExpires = new Date(Date.now() + 30 * 60 * 1000);
+            await user.save();
+            sendEmail(user.email, 'Verification Code - AGNEWS', '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif"><h1 style="color:#E53935">AGASOBANUYE MOVIES</h1><p>Your verification code is:</p><h1 style="color:#FFC107;font-size:3rem;letter-spacing:5px">' + newCode + '</h1></div>');
+            return res.status(400).json({ error: 'A new code has been sent. Please check your email.' });
+        }
         if (user.emailVerificationCode !== code) return res.status(400).json({ error: 'Invalid verification code.' });
-        if (new Date() > user.emailVerificationExpires) return res.status(400).json({ error: 'Verification code expired. Request a new one.' });
+        if (new Date() > user.emailVerificationExpires) {
+            const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+            user.emailVerificationCode = newCode;
+            user.emailVerificationExpires = new Date(Date.now() + 30 * 60 * 1000);
+            await user.save();
+            sendEmail(user.email, 'New Code - AGNEWS', '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif"><h1 style="color:#E53935">AGASOBANUYE MOVIES</h1><p>Your new code is:</p><h1 style="color:#FFC107;font-size:3rem;letter-spacing:5px">' + newCode + '</h1></div>');
+            return res.status(400).json({ error: 'Code expired. A new code has been sent.' });
+        }
         user.isEmailVerified = true; user.emailVerificationCode = undefined; user.emailVerificationExpires = undefined;
-        user.notifications.push({ message: 'Email verified successfully!', type: 'success' });
+        user.notifications.push({ message: 'Email verified successfully! You can now subscribe.', type: 'success' });
         await user.save();
-        res.json({ success: true, message: 'Email verified!' });
+        res.json({ success: true, message: 'Email verified! You can now subscribe to any plan.' });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -305,7 +322,7 @@ app.post('/api/resend-verification', authMiddleware, async (req, res) => {
         const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
         user.emailVerificationCode = verificationCode; user.emailVerificationExpires = new Date(Date.now() + 30 * 60 * 1000);
         await user.save();
-        sendEmail(user.email, 'New Verification Code - AGNEWS', '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif"><h1 style="color:#E53935">AGASOBANUYE MOVIES</h1><p>Your new verification code is:</p><h1 style="color:#FFC107;font-size:3rem;letter-spacing:5px">' + verificationCode + '</h1></div>');
+        sendEmail(user.email, 'Verification Code - AGNEWS', '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif"><h1 style="color:#E53935">AGASOBANUYE MOVIES</h1><p>Your verification code is:</p><h1 style="color:#FFC107;font-size:3rem;letter-spacing:5px">' + verificationCode + '</h1></div>');
         res.json({ success: true, message: 'New code sent!' });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -404,60 +421,33 @@ app.get('/api/contents/:id', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ========== STREAM & DOWNLOAD - NEW SYSTEM ==========
-
 // Get streaming URL for specific part/episode
 app.get('/api/contents/:id/stream', async (req, res) => {
     try {
         const content = await Content.findById(req.params.id);
         if (!content) return res.status(404).json({ error: 'Content not found' });
-        
         const partIndex = parseInt(req.query.part) || 0;
         const seasonIndex = parseInt(req.query.season) || 0;
         const episodeIndex = parseInt(req.query.episode) || 0;
-        
         let videoUrl = '';
-        let itemTitle = '';
-        
         if (content.type === 'movie' && content.parts && content.parts.length > partIndex) {
             videoUrl = content.parts[partIndex].videoUrl;
-            itemTitle = content.parts[partIndex].title || 'Part ' + content.parts[partIndex].partNumber;
         } else if (content.type === 'series' && content.seasons && content.seasons[seasonIndex] && content.seasons[seasonIndex].episodes && content.seasons[seasonIndex].episodes[episodeIndex]) {
             videoUrl = content.seasons[seasonIndex].episodes[episodeIndex].videoUrl;
-            itemTitle = content.seasons[seasonIndex].episodes[episodeIndex].title || 'Episode ' + content.seasons[seasonIndex].episodes[episodeIndex].episodeNumber;
         }
-        
-        if (!videoUrl) {
-            return res.status(404).json({ error: 'No video URL found for this part/episode' });
-        }
-        
+        if (!videoUrl) return res.status(404).json({ error: 'No video URL found' });
         const streamUrl = getStreamUrl(videoUrl);
-        
-        // Track view
         const userId = req.user?.id || null;
         const deviceId = req.headers['x-device-id'] || req.ip || 'unknown';
-        let alreadyViewed = content.viewedBy && content.viewedBy.some(v => 
-            (userId && v.userId && v.userId.toString() === userId.toString()) || 
-            (!userId && v.deviceId === deviceId)
-        );
+        let alreadyViewed = content.viewedBy && content.viewedBy.some(v => (userId && v.userId && v.userId.toString() === userId.toString()) || (!userId && v.deviceId === deviceId));
         if (!alreadyViewed) {
             content.views = (content.views || 0) + 1;
             if (!content.viewedBy) content.viewedBy = [];
             content.viewedBy.push({ userId: userId, deviceId: deviceId, viewedAt: new Date() });
             await content.save();
         }
-        
-        res.json({ 
-            streamUrl: streamUrl, 
-            title: content.title,
-            itemTitle: itemTitle,
-            quality: content.quality,
-            message: 'Stream URL ready. Open in new tab to watch.'
-        });
-    } catch (err) {
-        console.error('Stream error:', err);
-        res.status(500).json({ error: err.message });
-    }
+        res.json({ streamUrl: streamUrl, title: content.title, quality: content.quality });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Download endpoint
@@ -465,39 +455,28 @@ app.post('/api/contents/:id/download', authMiddleware, async (req, res) => {
     try {
         const content = await Content.findById(req.params.id);
         if (!content) return res.status(404).json({ error: 'Content not found' });
-        
         const userPlan = req.user.subscription.plan || 'free';
         const userStatus = req.user.subscription.status || 'none';
-        
-        if (content.accessLevel !== 'free' && userStatus !== 'active') { 
-            return res.status(403).json({ error: 'Your subscription is pending approval. Please wait for admin verification.' }); 
-        }
-        if (!checkAccessLevel(userPlan, content.accessLevel)) { 
-            return res.status(403).json({ error: 'Subscribe to ' + content.accessLevel.toUpperCase() + ' plan to download!' }); 
-        }
-        
         const partIndex = parseInt(req.body?.part) || 0;
         const seasonIndex = parseInt(req.body?.season) || 0;
         const episodeIndex = parseInt(req.body?.episode) || 0;
-        
         let videoUrl = '';
+        let itemAccessLevel = 'free';
         if (content.type === 'movie' && content.parts && content.parts.length > partIndex) {
             videoUrl = content.parts[partIndex].videoUrl;
+            itemAccessLevel = content.parts[partIndex].accessLevel || content.accessLevel || 'free';
         } else if (content.type === 'series' && content.seasons && content.seasons[seasonIndex] && content.seasons[seasonIndex].episodes && content.seasons[seasonIndex].episodes[episodeIndex]) {
             videoUrl = content.seasons[seasonIndex].episodes[episodeIndex].videoUrl;
+            itemAccessLevel = content.seasons[seasonIndex].episodes[episodeIndex].accessLevel || content.accessLevel || 'free';
         } else if (content.parts?.[0]?.videoUrl) {
             videoUrl = content.parts[0].videoUrl;
         } else if (content.seasons?.[0]?.episodes?.[0]?.videoUrl) {
             videoUrl = content.seasons[0].episodes[0].videoUrl;
         }
-        
-        if (!videoUrl) {
-            return res.status(404).json({ error: 'No video available for download' });
-        }
-        
+        if (!videoUrl) return res.status(404).json({ error: 'No video available for download' });
+        if (itemAccessLevel !== 'free' && userStatus !== 'active') return res.status(403).json({ error: 'This part requires a subscription. Your subscription is pending approval.' });
+        if (!checkAccessLevel(userPlan, itemAccessLevel)) return res.status(403).json({ error: 'Subscribe to ' + itemAccessLevel.toUpperCase() + ' plan to download this part!' });
         const downloadUrl = getDownloadUrl(videoUrl);
-        
-        // Track download
         const userId = req.user.id;
         let alreadyDownloaded = content.downloadedBy && content.downloadedBy.some(d => d.userId && d.userId.toString() === userId.toString());
         if (!alreadyDownloaded) {
@@ -506,128 +485,92 @@ app.post('/api/contents/:id/download', authMiddleware, async (req, res) => {
             content.downloadedBy.push({ userId: userId, deviceId: req.ip, downloadedAt: new Date() });
             await content.save();
         }
-        
-        res.json({ 
-            downloadUrl: downloadUrl, 
-            quality: content.quality,
-            title: content.title,
-            message: 'Download ready! Opening in new tab...' 
-        });
+        res.json({ downloadUrl: downloadUrl, quality: content.quality, title: content.title });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Get all parts/episodes for folder-style display
+// Get all parts/episodes
 app.get('/api/contents/:id/parts', async (req, res) => {
     try {
         const content = await Content.findById(req.params.id);
         if (!content) return res.status(404).json({ error: 'Content not found' });
-        
         let items = [];
         if (content.type === 'movie' && content.parts) {
             items = content.parts.map((p, i) => ({
-                index: i,
-                type: 'part',
-                number: p.partNumber || String(i + 1),
-                title: p.title || 'Part ' + (i + 1),
-                videoUrl: p.videoUrl,
-                videoSource: p.videoSource,
-                streamUrl: getStreamUrl(p.videoUrl),
-                downloadUrl: getDownloadUrl(p.videoUrl)
+                index: i, type: 'part', number: p.partNumber || String(i + 1),
+                title: p.title || 'Part ' + (i + 1), videoUrl: p.videoUrl,
+                videoSource: p.videoSource, accessLevel: p.accessLevel || 'free',
+                streamUrl: getStreamUrl(p.videoUrl), downloadUrl: getDownloadUrl(p.videoUrl)
             }));
         } else if (content.type === 'series' && content.seasons) {
             content.seasons.forEach((season, si) => {
                 if (season.episodes) {
                     season.episodes.forEach((ep, ei) => {
                         items.push({
-                            index: items.length,
-                            type: 'episode',
-                            seasonIndex: si,
-                            episodeIndex: ei,
+                            index: items.length, type: 'episode', seasonIndex: si, episodeIndex: ei,
                             number: 'S' + season.seasonNumber + ' E' + ep.episodeNumber,
                             title: ep.title || 'Episode ' + ep.episodeNumber,
                             seasonTitle: season.title || 'Season ' + season.seasonNumber,
-                            videoUrl: ep.videoUrl,
-                            videoSource: ep.videoSource,
-                            streamUrl: getStreamUrl(ep.videoUrl),
-                            downloadUrl: getDownloadUrl(ep.videoUrl)
+                            videoUrl: ep.videoUrl, videoSource: ep.videoSource,
+                            accessLevel: ep.accessLevel || 'free',
+                            streamUrl: getStreamUrl(ep.videoUrl), downloadUrl: getDownloadUrl(ep.videoUrl)
                         });
                     });
                 }
             });
         }
-        
-        res.json({ 
-            contentTitle: content.title,
-            contentType: content.type,
-            accessLevel: content.accessLevel,
-            thumbnailUrl: content.thumbnailUrl,
-            items: items,
-            totalItems: items.length
-        });
+        res.json({ contentTitle: content.title, contentType: content.type, accessLevel: content.accessLevel, thumbnailUrl: content.thumbnailUrl, items: items, totalItems: items.length });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ========== COMMENTS ==========
-app.get('/api/comments/:contentId', async (req, res) => { 
-    const content = await Content.findById(req.params.contentId); 
-    if (!content) return res.status(404).json({ error: 'Not found' }); 
-    res.json((content.comments || []).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))); 
-});
-
-app.post('/api/comments/:contentId', async (req, res) => { 
-    const { userName, text } = req.body; 
-    if (!userName || !text) return res.status(400).json({ error: 'Name and comment required' }); 
-    const content = await Content.findById(req.params.contentId); 
-    if (!content) return res.status(404).json({ error: 'Not found' }); 
-    content.comments.push({ userName: userName.trim(), text: text.trim() }); 
-    await content.save(); 
-    res.json({ success: true }); 
-});
-
-app.post('/api/comments/:contentId/:commentId/like', async (req, res) => { 
-    const content = await Content.findById(req.params.contentId); 
-    const comment = content?.comments.id(req.params.commentId); 
-    if (!comment) return res.status(404).json({ error: 'Not found' }); 
-    comment.likes = (comment.likes || 0) + 1; 
-    await content.save(); 
-    res.json({ likes: comment.likes }); 
-});
+app.get('/api/comments/:contentId', async (req, res) => { const content = await Content.findById(req.params.contentId); if (!content) return res.status(404).json({ error: 'Not found' }); res.json((content.comments || []).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))); });
+app.post('/api/comments/:contentId', async (req, res) => { const { userName, text } = req.body; if (!userName || !text) return res.status(400).json({ error: 'Name and comment required' }); const content = await Content.findById(req.params.contentId); if (!content) return res.status(404).json({ error: 'Not found' }); content.comments.push({ userName: userName.trim(), text: text.trim() }); await content.save(); res.json({ success: true }); });
+app.post('/api/comments/:contentId/:commentId/like', async (req, res) => { const content = await Content.findById(req.params.contentId); const comment = content?.comments.id(req.params.commentId); if (!comment) return res.status(404).json({ error: 'Not found' }); comment.likes = (comment.likes || 0) + 1; await content.save(); res.json({ likes: comment.likes }); });
 
 // ========== PLANS ==========
-app.get('/api/plans', (req, res) => { 
-    res.json({ 
-        free: { name: 'Free', weekly: 0, monthly: 0, quarterly: 0, yearly: 0, features: ['Free movies', 'Ads', '480p'] }, 
-        basic: { name: 'Basic', weekly: 300, monthly: 500, quarterly: 1200, yearly: 3000, features: ['Free+Basic', 'Fewer ads', '720p', 'Download'] }, 
-        standard: { name: 'Standard', weekly: 500, monthly: 1000, quarterly: 2500, yearly: 7000, features: ['Most movies', 'Very few ads', '1080p', 'HD Download'] }, 
-        premium: { name: 'Premium', weekly: 1000, monthly: 2000, quarterly: 5000, yearly: 15000, features: ['Almost all', 'Almost no ads', '2K'] }, 
-        ultimate: { name: 'Ultimate', weekly: 2000, monthly: 5000, quarterly: 12000, yearly: 30000, features: ['ALL movies', 'NO ADS', '4K', 'VIP'] } 
-    }); 
-});
+app.get('/api/plans', (req, res) => { res.json({ free: { name: 'Free', weekly: 0, monthly: 0, quarterly: 0, yearly: 0, features: ['Free movies', 'Ads', '480p'] }, basic: { name: 'Basic', weekly: 300, monthly: 500, quarterly: 1200, yearly: 3000, features: ['Free+Basic', 'Fewer ads', '720p', 'Download'] }, standard: { name: 'Standard', weekly: 500, monthly: 1000, quarterly: 2500, yearly: 7000, features: ['Most movies', 'Very few ads', '1080p', 'HD Download'] }, premium: { name: 'Premium', weekly: 1000, monthly: 2000, quarterly: 5000, yearly: 15000, features: ['Almost all', 'Almost no ads', '2K'] }, ultimate: { name: 'Ultimate', weekly: 2000, monthly: 5000, quarterly: 12000, yearly: 30000, features: ['ALL movies', 'NO ADS', '4K', 'VIP'] } }); });
 
-// ========== SUBSCRIBE ==========
+// ========== SUBSCRIBE - WITH EMAIL VERIFICATION CHECK ==========
 app.post('/api/subscribe', authMiddleware, upload.single('paymentScreenshot'), async (req, res) => {
     try {
         const { plan, duration, phone, senderName, paymentMethod } = req.body;
         const plans = { basic: { weekly: 300, monthly: 500, quarterly: 1200, yearly: 3000 }, standard: { weekly: 500, monthly: 1000, quarterly: 2500, yearly: 7000 }, premium: { weekly: 1000, monthly: 2000, quarterly: 5000, yearly: 15000 }, ultimate: { weekly: 2000, monthly: 5000, quarterly: 12000, yearly: 30000 } };
         if (!plans[plan]?.[duration]) return res.status(400).json({ error: 'Invalid plan' });
         if (!phone || !senderName) return res.status(400).json({ error: 'Phone and name required' });
-        const txn = await Transaction.create({ userId: req.user._id, userEmail: req.user.email, userFullName: req.user.fullName, phone, amount: plans[plan][duration], plan, duration, paymentMethod: paymentMethod || 'momo', screenshotUrl: req.file ? '/uploads/payments/' + req.file.filename : '', senderName, status: 'pending' });
+        if (!req.file) return res.status(400).json({ error: 'Payment screenshot is required! Please upload proof of payment.' });
+        
+        // Check email verification
+        const user = await User.findById(req.user.id);
+        if (!user.isEmailVerified) {
+            // Auto-send new verification code
+            const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+            user.emailVerificationCode = verificationCode;
+            user.emailVerificationExpires = new Date(Date.now() + 30 * 60 * 1000);
+            await user.save();
+            sendEmail(user.email, 'Verify Your Email to Subscribe - AGNEWS',
+                '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif">' +
+                '<h1 style="color:#E53935">AGASOBANUYE MOVIES</h1><h2>Verify Your Email</h2>' +
+                '<p>You need to verify your email before subscribing.</p>' +
+                '<h1 style="color:#FFC107;font-size:3rem;letter-spacing:5px">' + verificationCode + '</h1>' +
+                '<p style="color:#b3b3b3">Code expires in 30 minutes.</p></div>');
+            return res.status(403).json({ error: 'Email not verified. A verification code has been sent to your email.', needsVerification: true, email: user.email });
+        }
+        
+        const txn = await Transaction.create({ userId: req.user._id, userEmail: req.user.email, userFullName: req.user.fullName, phone, amount: plans[plan][duration], plan, duration, paymentMethod: paymentMethod || 'momo', screenshotUrl: '/uploads/payments/' + req.file.filename, senderName, status: 'pending' });
         await User.findByIdAndUpdate(req.user._id, { 'subscription.status': 'pending', 'subscription.plan': plan, 'subscription.duration': duration });
-        req.user.notifications.push({ message: 'Payment submitted! Waiting for admin approval.', type: 'subscription' });
-        await req.user.save();
+        user.notifications.push({ message: 'Payment submitted! Waiting for admin approval.', type: 'subscription' });
+        await user.save();
         res.json({ success: true, message: 'Payment submitted! Admin will verify within 24 hours.', transaction: txn });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ========== ADMIN ROUTES ==========
-app.get('/api/admin/me', authMiddleware, adminMiddleware, async (req, res) => { 
-    const user = await User.findById(req.user.id).select('-password'); 
-    res.json({ ...user.toObject(), isHeadAdmin: user.email === 'agasobanuyenews@gmail.com' }); 
-});
+app.get('/api/admin/me', authMiddleware, adminMiddleware, async (req, res) => { const user = await User.findById(req.user.id).select('-password'); res.json({ ...user.toObject(), isHeadAdmin: user.email === 'agasobanuyenews@gmail.com' }); });
 
 app.post('/api/admin/upload', authMiddleware, adminMiddleware, upload.fields([{ name: 'thumbnail', maxCount: 1 }, { name: 'trailer', maxCount: 1 }, { name: 'video', maxCount: 1 }]), async (req, res) => {
     try {
-        const { type, title, description, category, year, director, cast, translator, language, country, accessLevel, quality, ageRating, tags, isFeatured, isTrending, videoSource, externalLink, seasonNumber, episodeNumber, episodeTitle } = req.body;
+        const { type, title, description, category, year, director, cast, translator, language, country, accessLevel, quality, ageRating, tags, isFeatured, isTrending, videoSource, externalLink, seasonNumber, episodeNumber, episodeTitle, partAccessLevel } = req.body;
         if (!req.files?.thumbnail?.[0]) return res.status(400).json({ error: 'Thumbnail required!' });
         if (!title || !description || !category || !year) return res.status(400).json({ error: 'Title, Description, Category, Year required!' });
         const data = { type: type || 'movie', title, description, category, year, director: director || '', cast: cast || '', translator: translator || 'Not translated', language: language || 'English', country: country || 'Rwanda', thumbnailUrl: '/uploads/thumbnails/' + req.files.thumbnail[0].filename, trailerUrl: req.files.trailer?.[0] ? '/uploads/trailers/' + req.files.trailer[0].filename : '', accessLevel: accessLevel || 'free', quality: quality || '720p', ageRating: ageRating || '13+', tags: tags ? tags.split(',').map(t => t.trim()) : [], isFeatured: isFeatured === 'true', isTrending: isTrending === 'true', isLatest: true, uploadedBy: req.user._id, uploadedByEmail: req.user.email };
@@ -635,92 +578,48 @@ app.post('/api/admin/upload', authMiddleware, adminMiddleware, upload.fields([{ 
         if (videoSrc === 'external' && externalLink?.trim()) videoUrl = externalLink.trim();
         else if (req.files?.video?.[0]) { videoUrl = '/uploads/videos/' + req.files.video[0].filename; videoSrc = 'upload'; }
         else return res.status(400).json({ error: 'Video file or link required!' });
-        if (data.type === 'movie') data.parts = [{ partNumber: '1', title: 'Full Movie', videoUrl, videoSource: videoSrc }];
-        else data.seasons = [{ seasonNumber: parseInt(seasonNumber) || 1, title: 'Season ' + (seasonNumber || 1), episodes: [{ episodeNumber: parseInt(episodeNumber) || 1, title: episodeTitle || 'Episode 1', videoUrl, videoSource: videoSrc }] }];
+        const pAccessLevel = partAccessLevel || accessLevel || 'free';
+        if (data.type === 'movie') data.parts = [{ partNumber: '1', title: 'Full Movie', videoUrl, videoSource: videoSrc, accessLevel: pAccessLevel }];
+        else data.seasons = [{ seasonNumber: parseInt(seasonNumber) || 1, title: 'Season ' + (seasonNumber || 1), episodes: [{ episodeNumber: parseInt(episodeNumber) || 1, title: episodeTitle || 'Episode 1', videoUrl, videoSource: videoSrc, accessLevel: pAccessLevel }] }];
         await Content.updateMany({}, { isLatest: false });
         const content = await Content.create(data);
         res.json({ success: true, content, message: 'Uploaded!' });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/admin/contents/:id', authMiddleware, adminMiddleware, async (req, res) => { 
-    const c = await Content.findByIdAndUpdate(req.params.id, { ...req.body, updatedAt: new Date() }, { new: true }); 
-    if (!c) return res.status(404).json({ error: 'Not found' }); 
-    res.json({ success: true, content: c }); 
-});
-
-app.delete('/api/admin/contents/:id', authMiddleware, adminMiddleware, async (req, res) => { 
-    await Content.findByIdAndDelete(req.params.id); 
-    res.json({ success: true }); 
-});
+app.put('/api/admin/contents/:id', authMiddleware, adminMiddleware, async (req, res) => { const c = await Content.findByIdAndUpdate(req.params.id, { ...req.body, updatedAt: new Date() }, { new: true }); if (!c) return res.status(404).json({ error: 'Not found' }); res.json({ success: true, content: c }); });
+app.delete('/api/admin/contents/:id', authMiddleware, adminMiddleware, async (req, res) => { await Content.findByIdAndDelete(req.params.id); res.json({ success: true }); });
 
 app.post('/api/admin/movies/:id/part', authMiddleware, adminMiddleware, upload.single('video'), async (req, res) => {
     try {
-        console.log('Add Part Request:', req.params.id, req.body);
         const c = await Content.findById(req.params.id);
         if (!c || c.type !== 'movie') return res.status(400).json({ error: 'Movie not found' });
-        const { partNumber, partTitle, videoSource, externalLink } = req.body;
+        const { partNumber, partTitle, videoSource, externalLink, accessLevel } = req.body;
         let videoUrl = '';
-        if ((videoSource === 'external' || videoSource === 'pixeldrain') && externalLink && externalLink.trim()) {
-            videoUrl = externalLink.trim();
-        } else if (req.file) {
-            videoUrl = '/uploads/videos/' + req.file.filename;
-        } else {
-            return res.status(400).json({ error: 'Video file or link required!' });
-        }
-        c.parts.push({ 
-            partNumber: partNumber || String(c.parts.length + 1), 
-            title: partTitle || 'Part ' + (c.parts.length + 1), 
-            videoUrl, 
-            videoSource: videoSource || 'external' 
-        });
-        c.updatedAt = new Date();
-        await c.save();
-        console.log('Part added successfully:', videoUrl);
+        if ((videoSource === 'external' || videoSource === 'pixeldrain') && externalLink && externalLink.trim()) videoUrl = externalLink.trim();
+        else if (req.file) videoUrl = '/uploads/videos/' + req.file.filename;
+        else return res.status(400).json({ error: 'Video file or link required!' });
+        c.parts.push({ partNumber: partNumber || String(c.parts.length + 1), title: partTitle || 'Part ' + (c.parts.length + 1), videoUrl, videoSource: videoSource || 'external', accessLevel: accessLevel || 'free' });
+        c.updatedAt = new Date(); await c.save();
         res.json({ success: true, content: c, message: 'Part added!' });
-    } catch (err) { 
-        console.error('Add Part Error:', err); 
-        res.status(500).json({ error: err.message }); 
-    }
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/admin/series/:id/episode', authMiddleware, adminMiddleware, upload.single('video'), async (req, res) => {
     try {
-        console.log('Add Episode Request - Body:', req.body);
-        console.log('Add Episode Request - File:', req.file);
         const c = await Content.findById(req.params.id);
         if (!c || c.type !== 'series') return res.status(400).json({ error: 'Series not found' });
-        const { seasonNumber, episodeNumber, episodeTitle, videoSource, externalLink } = req.body;
+        const { seasonNumber, episodeNumber, episodeTitle, videoSource, externalLink, accessLevel } = req.body;
         let videoUrl = '';
-        if ((videoSource === 'external' || videoSource === 'pixeldrain') && externalLink && externalLink.trim()) {
-            videoUrl = externalLink.trim();
-            console.log('Using external link:', videoUrl);
-        } else if (req.file) {
-            videoUrl = '/uploads/videos/' + req.file.filename;
-            console.log('Using uploaded file:', videoUrl);
-        } else {
-            console.log('No video source provided');
-            return res.status(400).json({ error: 'Video file or link required!' });
-        }
+        if ((videoSource === 'external' || videoSource === 'pixeldrain') && externalLink && externalLink.trim()) videoUrl = externalLink.trim();
+        else if (req.file) videoUrl = '/uploads/videos/' + req.file.filename;
+        else return res.status(400).json({ error: 'Video file or link required!' });
         let season = c.seasons.find(s => s.seasonNumber === parseInt(seasonNumber));
-        if (!season) { 
-            season = { seasonNumber: parseInt(seasonNumber), title: 'Season ' + seasonNumber, episodes: [] }; 
-            c.seasons.push(season); 
-        }
-        season.episodes.push({ 
-            episodeNumber: parseInt(episodeNumber) || season.episodes.length + 1, 
-            title: episodeTitle || 'Episode ' + (season.episodes.length + 1), 
-            videoUrl, 
-            videoSource: videoSource || 'external' 
-        });
-        c.updatedAt = new Date();
-        await c.save();
-        console.log('Episode added successfully:', videoUrl);
+        if (!season) { season = { seasonNumber: parseInt(seasonNumber), title: 'Season ' + seasonNumber, episodes: [] }; c.seasons.push(season); }
+        season.episodes.push({ episodeNumber: parseInt(episodeNumber) || season.episodes.length + 1, title: episodeTitle || 'Episode ' + (season.episodes.length + 1), videoUrl, videoSource: videoSource || 'external', accessLevel: accessLevel || 'free' });
+        c.updatedAt = new Date(); await c.save();
         res.json({ success: true, content: c, message: 'Episode added!' });
-    } catch (err) { 
-        console.error('Add Episode Error:', err); 
-        res.status(500).json({ error: err.message }); 
-    }
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/admin/subscriptions', authMiddleware, adminMiddleware, async (req, res) => {
@@ -745,9 +644,16 @@ app.put('/api/admin/subscriptions/:id', authMiddleware, adminMiddleware, async (
         if (user) {
             user.notifications.push({ message: 'Your ' + txn.plan.toUpperCase() + ' subscription has been APPROVED! Enjoy streaming!', type: 'success' });
             await user.save();
-            sendEmail(user.email, 'Subscription Approved!', '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif"><h1 style="color:#4CAF50">Subscription Approved!</h1><h2>Your ' + txn.plan.toUpperCase() + ' plan is now active!</h2><p>Duration: ' + txn.duration + '</p><p>Expires: ' + exp.toLocaleDateString() + '</p><p style="color:#b3b3b3">Enjoy unlimited streaming!</p></div>');
+            sendEmail(user.email, 'Subscription Approved! - AGASOBANUYE MOVIES',
+                '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif">' +
+                '<h1 style="color:#4CAF50">Subscription Approved!</h1>' +
+                '<h2>Your ' + txn.plan.toUpperCase() + ' plan is now active!</h2>' +
+                '<p>Duration: ' + txn.duration + '</p>' +
+                '<p>Expires: ' + exp.toLocaleDateString() + '</p>' +
+                '<p>Amount Paid: ' + (txn.amount || 0).toLocaleString() + ' RWF</p>' +
+                '<p style="color:#b3b3b3">Enjoy unlimited streaming!</p></div>');
         }
-        res.json({ success: true, message: 'Approved! User notified.' });
+        res.json({ success: true, message: 'Approved! User notified by email.' });
     } else if (status === 'rejected') {
         await User.findByIdAndUpdate(txn.userId, { 'subscription.status': 'none', 'subscription.plan': 'free', 'subscription.duration': 'none' });
         if (user) { user.notifications.push({ message: 'Your subscription was rejected. Reason: ' + (adminNote || 'No reason provided'), type: 'warning' }); await user.save(); }
@@ -758,122 +664,32 @@ app.put('/api/admin/subscriptions/:id', authMiddleware, adminMiddleware, async (
     } else { res.json({ success: true, message: 'Updated.' }); }
 });
 
-app.get('/api/admin/flagged-users', authMiddleware, adminMiddleware, async (req, res) => { 
-    res.json(await User.find({ isFlagged: true }).select('-password')); 
-});
+app.get('/api/admin/flagged-users', authMiddleware, adminMiddleware, async (req, res) => { res.json(await User.find({ isFlagged: true }).select('-password')); });
+app.put('/api/admin/flagged-users/:id', authMiddleware, adminMiddleware, async (req, res) => { const user = await User.findById(req.params.id); if (!user) return res.status(404).json({ error: 'Not found' }); if (req.body.action === 'clear') { user.isFlagged = false; user.devices = []; user.deviceCount = 0; } else if (req.body.action === 'terminate') { user.subscription = { plan: 'free', duration: 'none', status: 'expired', maxDevices: 6 }; } await user.save(); res.json({ success: true }); });
+app.get('/api/admin/comments', authMiddleware, adminMiddleware, async (req, res) => { const contents = await Content.find({ 'comments.0': { $exists: true } }).select('title comments'); let all = []; contents.forEach(c => c.comments.forEach(cm => all.push({ _id: cm._id, contentId: c._id, contentTitle: c.title, userName: cm.userName, text: cm.text, likes: cm.likes || 0, createdAt: cm.createdAt }))); res.json(all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))); });
+app.delete('/api/admin/comments/:contentId/:commentId', authMiddleware, adminMiddleware, async (req, res) => { const c = await Content.findById(req.params.contentId); if (!c) return res.status(404).json({ error: 'Not found' }); c.comments = c.comments.filter(cm => cm._id.toString() !== req.params.commentId); await c.save(); res.json({ success: true }); });
 
-app.put('/api/admin/flagged-users/:id', authMiddleware, adminMiddleware, async (req, res) => { 
-    const user = await User.findById(req.params.id); 
-    if (!user) return res.status(404).json({ error: 'Not found' }); 
-    if (req.body.action === 'clear') { user.isFlagged = false; user.devices = []; user.deviceCount = 0; } 
-    else if (req.body.action === 'terminate') { user.subscription = { plan: 'free', duration: 'none', status: 'expired', maxDevices: 6 }; } 
-    await user.save(); 
-    res.json({ success: true }); 
-});
-
-app.get('/api/admin/comments', authMiddleware, adminMiddleware, async (req, res) => { 
-    const contents = await Content.find({ 'comments.0': { $exists: true } }).select('title comments'); 
-    let all = []; 
-    contents.forEach(c => c.comments.forEach(cm => all.push({ _id: cm._id, contentId: c._id, contentTitle: c.title, userName: cm.userName, text: cm.text, likes: cm.likes || 0, createdAt: cm.createdAt }))); 
-    res.json(all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))); 
-});
-
-app.delete('/api/admin/comments/:contentId/:commentId', authMiddleware, adminMiddleware, async (req, res) => { 
-    const c = await Content.findById(req.params.contentId); 
-    if (!c) return res.status(404).json({ error: 'Not found' }); 
-    c.comments = c.comments.filter(cm => cm._id.toString() !== req.params.commentId); 
-    await c.save(); 
-    res.json({ success: true }); 
-});
-
-// ========== ADS ==========
 app.get('/api/ads', async (req, res) => { res.json(await Ad.find({ isActive: true }).sort({ createdAt: -1 })); });
 app.get('/api/admin/ads', authMiddleware, adminMiddleware, async (req, res) => { res.json(await Ad.find().sort({ createdAt: -1 })); });
-app.post('/api/admin/ads', authMiddleware, adminMiddleware, upload.single('adMedia'), async (req, res) => { 
-    const { type, title, description, link, position, contactPhone, contactName, businessName, targetPlans } = req.body; 
-    let mediaUrl = req.file ? '/uploads/ads/' + req.file.filename : req.body.mediaUrl || ''; 
-    const ad = await Ad.create({ type, title, description: description || '', mediaUrl, link: link || '', position: position || 'sidebar', contactPhone: contactPhone || '', contactName: contactName || '', businessName: businessName || '', targetPlans: targetPlans ? targetPlans.split(',').map(p => p.trim()) : ['free'], createdBy: req.user.email }); 
-    res.json({ success: true, ad }); 
-});
-app.put('/api/admin/ads/:id', authMiddleware, adminMiddleware, async (req, res) => { 
-    await Ad.findByIdAndUpdate(req.params.id, { ...req.body, updatedAt: new Date() }); 
-    res.json({ success: true }); 
-});
-app.delete('/api/admin/ads/:id', authMiddleware, adminMiddleware, async (req, res) => { 
-    await Ad.findByIdAndDelete(req.params.id); 
-    res.json({ success: true }); 
-});
+app.post('/api/admin/ads', authMiddleware, adminMiddleware, upload.single('adMedia'), async (req, res) => { const { type, title, description, link, position, contactPhone, contactName, businessName, targetPlans } = req.body; let mediaUrl = req.file ? '/uploads/ads/' + req.file.filename : req.body.mediaUrl || ''; const ad = await Ad.create({ type, title, description: description || '', mediaUrl, link: link || '', position: position || 'sidebar', contactPhone: contactPhone || '', contactName: contactName || '', businessName: businessName || '', targetPlans: targetPlans ? targetPlans.split(',').map(p => p.trim()) : ['free'], createdBy: req.user.email }); res.json({ success: true, ad }); });
+app.put('/api/admin/ads/:id', authMiddleware, adminMiddleware, async (req, res) => { await Ad.findByIdAndUpdate(req.params.id, { ...req.body, updatedAt: new Date() }); res.json({ success: true }); });
+app.delete('/api/admin/ads/:id', authMiddleware, adminMiddleware, async (req, res) => { await Ad.findByIdAndDelete(req.params.id); res.json({ success: true }); });
 
-// ========== PAYMENTS & WITHDRAWALS ==========
-app.get('/api/admin/payments', authMiddleware, adminMiddleware, async (req, res) => { 
-    const transactions = await Transaction.find({ status: 'approved' }).sort({ createdAt: -1 }); 
-    const totalRevenue = transactions.reduce((s, t) => s + (t.amount || 0), 0); 
-    const withdrawals = await Withdrawal.find(); 
-    const totalWithdrawn = withdrawals.filter(w => w.status === 'completed').reduce((s, w) => s + (w.amount || 0), 0); 
-    const subscribers = await User.find({ role: 'user', 'subscription.status': 'active', 'subscription.expiresAt': { $gt: new Date() } }); 
-    res.json({ transactions, totalRevenue, totalWithdrawn, availableBalance: totalRevenue - totalWithdrawn, activeSubscribers: subscribers.length, subscribers }); 
-});
+app.get('/api/admin/payments', authMiddleware, adminMiddleware, async (req, res) => { const transactions = await Transaction.find({ status: 'approved' }).sort({ createdAt: -1 }); const totalRevenue = transactions.reduce((s, t) => s + (t.amount || 0), 0); const withdrawals = await Withdrawal.find(); const totalWithdrawn = withdrawals.filter(w => w.status === 'completed').reduce((s, w) => s + (w.amount || 0), 0); const subscribers = await User.find({ role: 'user', 'subscription.status': 'active', 'subscription.expiresAt': { $gt: new Date() } }); res.json({ transactions, totalRevenue, totalWithdrawn, availableBalance: totalRevenue - totalWithdrawn, activeSubscribers: subscribers.length, subscribers }); });
+app.post('/api/admin/withdraw', authMiddleware, adminMiddleware, async (req, res) => { const { amount, bankName, accountNumber, accountName } = req.body; const w = await Withdrawal.create({ amount, bankDetails: { bankName, accountNumber, accountName }, requestedBy: req.user._id, requestedByEmail: req.user.email, requestedByName: req.user.fullName }); res.json({ success: true, withdrawal: w }); });
+app.get('/api/admin/withdrawals', authMiddleware, adminMiddleware, async (req, res) => { res.json(await Withdrawal.find().sort({ createdAt: -1 })); });
+app.put('/api/admin/withdrawals/:id', authMiddleware, headAdminMiddleware, async (req, res) => { await Withdrawal.findByIdAndUpdate(req.params.id, { status: req.body.status, completedAt: new Date(), processedBy: req.user.fullName }); res.json({ success: true }); });
+app.get('/api/admin/stats', authMiddleware, adminMiddleware, async (req, res) => { const totalContent = await Content.countDocuments(); const totalUsers = await User.countDocuments({ role: 'user' }); const activeSubscribers = await User.countDocuments({ role: 'user', 'subscription.status': 'active', 'subscription.expiresAt': { $gt: new Date() } }); const pendingPayments = await Transaction.countDocuments({ status: 'pending' }); const flaggedUsers = await User.countDocuments({ isFlagged: true }); const views = await Content.aggregate([{ $group: { _id: null, total: { $sum: '$views' } } }]); const downloads = await Content.aggregate([{ $group: { _id: null, total: { $sum: '$downloads' } } }]); const revenue = await Transaction.aggregate([{ $match: { status: 'approved' } }, { $group: { _id: null, total: { $sum: '$amount' } } }]); res.json({ totalContent, totalMovies: await Content.countDocuments({ type: 'movie' }), totalSeries: await Content.countDocuments({ type: 'series' }), totalUsers, activeSubscribers, pendingPayments, flaggedUsers, totalViews: views[0]?.total || 0, totalDownloads: downloads[0]?.total || 0, totalComments: (await Content.aggregate([{ $unwind: '$comments' }, { $group: { _id: null, total: { $sum: 1 } } }]))[0]?.total || 0, activeAds: await Ad.countDocuments({ isActive: true }), totalRevenue: revenue[0]?.total || 0 }); });
 
-app.post('/api/admin/withdraw', authMiddleware, adminMiddleware, async (req, res) => { 
-    const { amount, bankName, accountNumber, accountName } = req.body; 
-    const w = await Withdrawal.create({ amount, bankDetails: { bankName, accountNumber, accountName }, requestedBy: req.user._id, requestedByEmail: req.user.email, requestedByName: req.user.fullName }); 
-    res.json({ success: true, withdrawal: w }); 
-});
-
-app.get('/api/admin/withdrawals', authMiddleware, adminMiddleware, async (req, res) => { 
-    res.json(await Withdrawal.find().sort({ createdAt: -1 })); 
-});
-
-app.put('/api/admin/withdrawals/:id', authMiddleware, headAdminMiddleware, async (req, res) => { 
-    await Withdrawal.findByIdAndUpdate(req.params.id, { status: req.body.status, completedAt: new Date(), processedBy: req.user.fullName }); 
-    res.json({ success: true }); 
-});
-
-app.get('/api/admin/stats', authMiddleware, adminMiddleware, async (req, res) => { 
-    const totalContent = await Content.countDocuments(); 
-    const totalUsers = await User.countDocuments({ role: 'user' }); 
-    const activeSubscribers = await User.countDocuments({ role: 'user', 'subscription.status': 'active', 'subscription.expiresAt': { $gt: new Date() } }); 
-    const pendingPayments = await Transaction.countDocuments({ status: 'pending' }); 
-    const flaggedUsers = await User.countDocuments({ isFlagged: true }); 
-    const views = await Content.aggregate([{ $group: { _id: null, total: { $sum: '$views' } } }]); 
-    const downloads = await Content.aggregate([{ $group: { _id: null, total: { $sum: '$downloads' } } }]); 
-    const revenue = await Transaction.aggregate([{ $match: { status: 'approved' } }, { $group: { _id: null, total: { $sum: '$amount' } } }]); 
-    res.json({ totalContent, totalMovies: await Content.countDocuments({ type: 'movie' }), totalSeries: await Content.countDocuments({ type: 'series' }), totalUsers, activeSubscribers, pendingPayments, flaggedUsers, totalViews: views[0]?.total || 0, totalDownloads: downloads[0]?.total || 0, totalComments: (await Content.aggregate([{ $unwind: '$comments' }, { $group: { _id: null, total: { $sum: 1 } } }]))[0]?.total || 0, activeAds: await Ad.countDocuments({ isActive: true }), totalRevenue: revenue[0]?.total || 0 }); 
-});
-
-// ========== MY LIST ==========
-app.post('/api/mylist/:contentId', authMiddleware, async (req, res) => { 
-    const user = await User.findById(req.user.id); 
-    if (!user.myList.includes(req.params.contentId)) { user.myList.push(req.params.contentId); await user.save(); } 
-    res.json({ success: true }); 
-});
-
-app.delete('/api/mylist/:contentId', authMiddleware, async (req, res) => { 
-    const user = await User.findById(req.user.id); 
-    user.myList = user.myList.filter(id => id.toString() !== req.params.contentId); 
-    await user.save(); 
-    res.json({ success: true }); 
-});
-
-app.get('/api/mylist', authMiddleware, async (req, res) => { 
-    const user = await User.findById(req.user.id).populate('myList'); 
-    res.json(user.myList || []); 
-});
+app.post('/api/mylist/:contentId', authMiddleware, async (req, res) => { const user = await User.findById(req.user.id); if (!user.myList.includes(req.params.contentId)) { user.myList.push(req.params.contentId); await user.save(); } res.json({ success: true }); });
+app.delete('/api/mylist/:contentId', authMiddleware, async (req, res) => { const user = await User.findById(req.user.id); user.myList = user.myList.filter(id => id.toString() !== req.params.contentId); await user.save(); res.json({ success: true }); });
+app.get('/api/mylist', authMiddleware, async (req, res) => { const user = await User.findById(req.user.id).populate('myList'); res.json(user.myList || []); });
 
 // ========== CLEAN URL ROUTES ==========
 const publicPath = path.join(__dirname, 'public');
 app.use(express.static(publicPath));
 app.get('/', (req, res) => { res.sendFile(path.join(publicPath, 'index.html')); });
-app.get('/admin', (req, res) => { 
-    const token = req.query.token; 
-    if (!token) return res.sendFile(path.join(publicPath, 'admin-login.html')); 
-    try { 
-        jwt.verify(token, process.env.JWT_SECRET || 'agnews_final_secret_2026'); 
-        res.sendFile(path.join(publicPath, 'admin.html')); 
-    } catch (err) { 
-        res.sendFile(path.join(publicPath, 'admin-login.html')); 
-    } 
-});
+app.get('/admin', (req, res) => { const token = req.query.token; if (!token) return res.sendFile(path.join(publicPath, 'admin-login.html')); try { jwt.verify(token, process.env.JWT_SECRET || 'agnews_final_secret_2026'); res.sendFile(path.join(publicPath, 'admin.html')); } catch (err) { res.sendFile(path.join(publicPath, 'admin-login.html')); } });
 app.get('/admin-login', (req, res) => { res.sendFile(path.join(publicPath, 'admin-login.html')); });
 app.get('/admin.html', (req, res) => { res.redirect('/admin-login'); });
 app.get('/index.html', (req, res) => { res.redirect('/'); });
@@ -881,10 +697,5 @@ app.get('/index.html', (req, res) => { res.redirect('/'); });
 // ========== START ==========
 createAdmins().then(() => {
     const PORT = process.env.PORT || 3000;
-    app.listen(PORT, '0.0.0.0', () => { 
-        console.log('\n AGASOBANUYE MOVIES | AGNEWS');
-        console.log(' Port: ' + PORT);
-        console.log(' Admin: agasobanuyenews@gmail.com / Joselove@250');
-        console.log(' Email: ' + (process.env.EMAIL_USER || 'Not configured') + '\n');
-    });
+    app.listen(PORT, '0.0.0.0', () => { console.log('\nAGASOBANUYE MOVIES | AGNEWS\nPort: ' + PORT + '\nAdmin: agasobanuyenews@gmail.com\n'); });
 });
