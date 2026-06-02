@@ -29,23 +29,18 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/agnews')
 
 // ========== EMAIL SETUP ==========
 const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
+    host: 'smtp-relay.brevo.com',
     port: 587,
-    secure: false,
     auth: {
-        user: process.env.EMAIL_USER || 'agasobanuyenews@gmail.com',
+        user: process.env.EMAIL_USER || 'ad52a6001@smtp-brevo.com',
         pass: process.env.EMAIL_PASS || ''
-    },
-    tls: {
-        rejectUnauthorized: false
     }
 });
-
 async function sendEmail(to, subject, html) {
     try {
         if (!process.env.EMAIL_PASS) { console.log('Email not configured, skipping'); return false; }
         await transporter.sendMail({
-            from: '"AGASOBANUYE MOVIES" <' + (process.env.EMAIL_USER || 'agasobanuyenews@gmail.com') + '>',
+            from: '"AGASOBANUYE MOVIES" <' + (process.env.EMAIL_USER || 'ad52a6001@smtp-brevo.com') + '>',
             to: to, subject: subject, html: html
         });
         console.log('Email sent to ' + to);
