@@ -46,20 +46,7 @@ async function sendEmail(to, subject, html) {
             })
         });
         const data = await response.json();
-        if (response.ok && data.Messages[0].Status === 'success') {
-            console.log('Email sent to ' + to);
-            return true;
-        } else {
-            console.log('Email failed:', JSON.stringify(data));
-            return false;
-        }
-    } catch (err) {
-        console.log('Email error:', err.message);
-        return false;
-    }
-}
-        const data = await response.json();
-        if (response.ok) {
+        if (response.ok && data.Messages && data.Messages[0].Status === 'success') {
             console.log('Email sent to ' + to);
             return true;
         } else {
