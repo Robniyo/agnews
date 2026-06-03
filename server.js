@@ -29,27 +29,25 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/agnews')
 
 async function sendEmail(to, subject, html) {
     try {
-        if (!process.env.EMAIL_PASS || !process.env.EMAIL_USER) { console.log('Email not configured'); return false; }
-        const response = await fetch('https://api.mailjet.com/v3.1/send', {
+        if (!process.env.EMAIL_PASS) { console.log('Email not configured'); return false; }
+        const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
             method: 'POST',
             headers: {
-                'Authorization': 'Basic ' + Buffer.from(process.env.EMAIL_USER + ':' + process.env.EMAIL_PASS).toString('base64'),
+                'Authorization': 'Bearer ' + process.env.EMAIL_PASS,
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-                Messages: [{
-                    From: { Email: 'agasobanuyenews@gmail.com', Name: 'AGASOBANUYE MOVIES' },
-                    To: [{ Email: to }],
-                    Subject: subject,
-                    HTMLPart: html
-                }]
+                personalizations: [{ to: [{ email: to }] }],
+                from: { email: 'agasobanuyenews@gmail.com', name: 'AGASOBANUYE MOVIES' },
+                subject: subject,
+                content: [{ type: 'text/html', value: html }]
             })
         });
-        const data = await response.json();
-        if (response.ok && data.Messages && data.Messages[0].Status === 'success') {
+        if (response.status === 202) {
             console.log('Email sent to ' + to);
             return true;
         } else {
+            const data = await response.json();
             console.log('Email failed:', JSON.stringify(data));
             return false;
         }
@@ -58,6 +56,7 @@ async function sendEmail(to, subject, html) {
         return false;
     }
 }
+
 // ========== MODELS ==========
 const DeviceSchema = new mongoose.Schema({
     deviceId: String, deviceName: String, ipAddress: String,
