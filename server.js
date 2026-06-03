@@ -8,6 +8,8 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
 const app = express();
 
@@ -25,6 +27,13 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/agnews')
     .then(() => console.log('MongoDB Connected'))
     .catch(err => console.log('MongoDB Error:', err));
+
+// Cloudinary Configuration
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'dlxiuwv30',
+    api_key: process.env.CLOUDINARY_API_KEY || '378977492756877',
+    api_secret: process.env.CLOUDINARY_API_SECRET || '0SXFdEcf5NtbQg9LKhphZcxPh5E'
+});
 
 // ========== MODELS ==========
 const DeviceSchema = new mongoose.Schema({
@@ -140,7 +149,7 @@ const AdSchema = new mongoose.Schema({
 });
 const Ad = mongoose.model('Ad', AdSchema);
 
-// ========== MULTER ==========
+// ========== MULTER WITH CLOUDINARY ==========
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         if (file.fieldname === 'thumbnail') cb(null, path.join(__dirname, 'uploads/thumbnails/'));
@@ -154,6 +163,21 @@ const storage = multer.diskStorage({
     }
 });
 const upload = multer({ storage, limits: { fileSize: 2 * 1024 * 1024 * 1024 } });
+
+// Cloudinary upload helper
+async function uploadToCloudinary(file, folder, resourceType = 'image') {
+    try {
+        const result = await cloudinary.uploader.upload(file.path, {
+            folder: 'agnews/' + folder,
+            resource_type: resourceType
+        });
+        fs.unlink(file.path, () => {});
+        return result.secure_url;
+    } catch (err) {
+        console.log('Cloudinary upload error:', err.message);
+        return '/' + file.path.replace(__dirname, '').replace(/\\/g, '/');
+    }
+}
 
 // ========== MIDDLEWARE ==========
 const authMiddleware = async (req, res, next) => {
@@ -456,7 +480,8 @@ app.post('/api/subscribe', authMiddleware, upload.single('paymentScreenshot'), a
         if (!req.file) return res.status(400).json({ error: 'Payment screenshot is required! Please upload proof of payment.' });
         
         const user = await User.findById(req.user.id);
-        const txn = await Transaction.create({ userId: req.user._id, userEmail: req.user.email, userFullName: req.user.fullName, phone, amount: plans[plan][duration], plan, duration, paymentMethod: paymentMethod || 'momo', screenshotUrl: '/uploads/payments/' + req.file.filename, senderName, status: 'pending' });
+        const screenshotUrl = await uploadToCloudinary(req.file, 'payments');
+        const txn = await Transaction.create({ userId: req.user._id, userEmail: req.user.email, userFullName: req.user.fullName, phone, amount: plans[plan][duration], plan, duration, paymentMethod: paymentMethod || 'momo', screenshotUrl: screenshotUrl, senderName, status: 'pending' });
         await User.findByIdAndUpdate(req.user._id, { 'subscription.status': 'pending', 'subscription.plan': plan, 'subscription.duration': duration });
         user.notifications.push({ message: 'Payment submitted! Waiting for admin approval.', type: 'subscription' });
         await user.save();
@@ -472,7 +497,9 @@ app.post('/api/admin/upload', authMiddleware, adminMiddleware, upload.fields([{ 
         const { type, title, description, category, year, director, cast, translator, language, country, accessLevel, quality, ageRating, tags, isFeatured, isTrending, videoSource, externalLink, seasonNumber, episodeNumber, episodeTitle, partAccessLevel } = req.body;
         if (!req.files?.thumbnail?.[0]) return res.status(400).json({ error: 'Thumbnail required!' });
         if (!title || !description || !category || !year) return res.status(400).json({ error: 'Title, Description, Category, Year required!' });
-        const data = { type: type || 'movie', title, description, category, year, director: director || '', cast: cast || '', translator: translator || 'Not translated', language: language || 'English', country: country || 'Rwanda', thumbnailUrl: '/uploads/thumbnails/' + req.files.thumbnail[0].filename, trailerUrl: req.files.trailer?.[0] ? '/uploads/trailers/' + req.files.trailer[0].filename : '', accessLevel: accessLevel || 'free', quality: quality || '720p', ageRating: ageRating || '13+', tags: tags ? tags.split(',').map(t => t.trim()) : [], isFeatured: isFeatured === 'true', isTrending: isTrending === 'true', isLatest: true, uploadedBy: req.user._id, uploadedByEmail: req.user.email };
+        const thumbnailUrl = await uploadToCloudinary(req.files.thumbnail[0], 'thumbnails');
+        const trailerUrl = req.files.trailer?.[0] ? await uploadToCloudinary(req.files.trailer[0], 'trailers', 'video') : '';
+        const data = { type: type || 'movie', title, description, category, year, director: director || '', cast: cast || '', translator: translator || 'Not translated', language: language || 'English', country: country || 'Rwanda', thumbnailUrl: thumbnailUrl, trailerUrl: trailerUrl, accessLevel: accessLevel || 'free', quality: quality || '720p', ageRating: ageRating || '13+', tags: tags ? tags.split(',').map(t => t.trim()) : [], isFeatured: isFeatured === 'true', isTrending: isTrending === 'true', isLatest: true, uploadedBy: req.user._id, uploadedByEmail: req.user.email };
         let videoUrl = '', videoSrc = videoSource || 'external';
         if (videoSrc === 'external' && externalLink?.trim()) videoUrl = externalLink.trim();
         else if (req.files?.video?.[0]) { videoUrl = '/uploads/videos/' + req.files.video[0].filename; videoSrc = 'upload'; }
@@ -559,7 +586,12 @@ app.delete('/api/admin/comments/:contentId/:commentId', authMiddleware, adminMid
 
 app.get('/api/ads', async (req, res) => { res.json(await Ad.find({ isActive: true }).sort({ createdAt: -1 })); });
 app.get('/api/admin/ads', authMiddleware, adminMiddleware, async (req, res) => { res.json(await Ad.find().sort({ createdAt: -1 })); });
-app.post('/api/admin/ads', authMiddleware, adminMiddleware, upload.single('adMedia'), async (req, res) => { const { type, title, description, link, position, contactPhone, contactName, businessName, targetPlans } = req.body; let mediaUrl = req.file ? '/uploads/ads/' + req.file.filename : req.body.mediaUrl || ''; const ad = await Ad.create({ type, title, description: description || '', mediaUrl, link: link || '', position: position || 'sidebar', contactPhone: contactPhone || '', contactName: contactName || '', businessName: businessName || '', targetPlans: targetPlans ? targetPlans.split(',').map(p => p.trim()) : ['free'], createdBy: req.user.email }); res.json({ success: true, ad }); });
+app.post('/api/admin/ads', authMiddleware, adminMiddleware, upload.single('adMedia'), async (req, res) => {
+    const { type, title, description, link, position, contactPhone, contactName, businessName, targetPlans } = req.body;
+    let mediaUrl = req.file ? await uploadToCloudinary(req.file, 'ads', 'auto') : req.body.mediaUrl || '';
+    const ad = await Ad.create({ type, title, description: description || '', mediaUrl, link: link || '', position: position || 'sidebar', contactPhone: contactPhone || '', contactName: contactName || '', businessName: businessName || '', targetPlans: targetPlans ? targetPlans.split(',').map(p => p.trim()) : ['free'], createdBy: req.user.email });
+    res.json({ success: true, ad });
+});
 app.put('/api/admin/ads/:id', authMiddleware, adminMiddleware, async (req, res) => { await Ad.findByIdAndUpdate(req.params.id, { ...req.body, updatedAt: new Date() }); res.json({ success: true }); });
 app.delete('/api/admin/ads/:id', authMiddleware, adminMiddleware, async (req, res) => { await Ad.findByIdAndDelete(req.params.id); res.json({ success: true }); });
 
