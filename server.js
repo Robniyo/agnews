@@ -8,7 +8,6 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-//const nodemailer = require('nodemailer');
 
 const app = express();
 
@@ -26,36 +25,6 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/agnews')
     .then(() => console.log('MongoDB Connected'))
     .catch(err => console.log('MongoDB Error:', err));
-
-async function sendEmail(to, subject, html) {
-    try {
-        if (!process.env.EMAIL_PASS) { console.log('Email not configured'); return false; }
-        const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
-            method: 'POST',
-            headers: {
-                'Authorization': 'Bearer ' + process.env.EMAIL_PASS,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                personalizations: [{ to: [{ email: to }] }],
-                from: { email: 'agasobanuyenews@gmail.com', name: 'AGASOBANUYE MOVIES' },
-                subject: subject,
-                content: [{ type: 'text/html', value: html }]
-            })
-        });
-        if (response.status === 202) {
-            console.log('Email sent to ' + to);
-            return true;
-        } else {
-            const data = await response.json();
-            console.log('Email failed:', JSON.stringify(data));
-            return false;
-        }
-    } catch (err) {
-        console.log('Email error:', err.message);
-        return false;
-    }
-}
 
 // ========== MODELS ==========
 const DeviceSchema = new mongoose.Schema({
@@ -84,9 +53,7 @@ const UserSchema = new mongoose.Schema({
     fullName: { type: String, default: '' },
     phone: { type: String, default: '' },
     role: { type: String, enum: ['user', 'admin'], default: 'user' },
-    isEmailVerified: { type: Boolean, default: false },
-    emailVerificationCode: String,
-    emailVerificationExpires: Date,
+    isEmailVerified: { type: Boolean, default: true },
     subscription: {
         plan: { type: String, enum: ['free', 'basic', 'standard', 'premium', 'ultimate'], default: 'free' },
         duration: { type: String, enum: ['weekly', 'monthly', 'quarterly', 'yearly', 'none'], default: 'none' },
@@ -232,13 +199,11 @@ const checkAccessLevel = (userPlan, contentAccessLevel) => {
     return (planLevels[userPlan] || 0) >= (planLevels[contentAccessLevel] || 0);
 };
 
-// Helper: Get streaming URL - send user to Pixeldrain page (not API)
 function getStreamUrl(url) {
     if (!url) return '';
     return url;
 }
 
-// Helper: Get download URL - send user to Pixeldrain page
 function getDownloadUrl(url) {
     if (!url) return '';
     return url;
@@ -269,67 +234,14 @@ app.post('/api/register', async (req, res) => {
         if (!email || !password) return res.status(400).json({ error: 'Email and password required!' });
         if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters!' });
         if (await User.findOne({ email })) return res.status(400).json({ error: 'Email already registered!' });
-        const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-        const verificationExpires = new Date(Date.now() + 30 * 60 * 1000);
         const user = await User.create({
             email, password: await bcrypt.hash(password, 10), fullName: fullName || 'Movie Lover', phone: phone || '',
-            isEmailVerified: false, emailVerificationCode: verificationCode, emailVerificationExpires: verificationExpires,
+            isEmailVerified: true,
             subscription: { plan: 'free', duration: 'none', startDate: new Date(), status: 'active', maxDevices: 6 },
-            notifications: [{ message: 'Welcome to AGASOBANUYE MOVIES! Verify your email to subscribe.', type: 'system' }]
+            notifications: [{ message: 'Welcome to AGASOBANUYE MOVIES!', type: 'system' }]
         });
-        // Send verification email immediately on registration
-        sendEmail(email, 'Verify Your Email - AGASOBANUYE MOVIES',
-            '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif">' +
-            '<h1 style="color:#E53935">AGASOBANUYE MOVIES</h1><h2>Welcome ' + (fullName || 'Movie Lover') + '!</h2>' +
-            '<p>Please verify your email to unlock subscriptions.</p>' +
-            '<h1 style="color:#FFC107;font-size:3rem;letter-spacing:5px">' + verificationCode + '</h1>' +
-            '<p style="color:#b3b3b3">Code expires in 30 minutes.</p></div>');
         const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET || 'agnews_final_secret_2026');
-        res.status(201).json({ token, user: { id: user._id, email, role: user.role, fullName: user.fullName, subscription: user.subscription, isEmailVerified: false }, message: 'Account created! Please verify your email.', needsVerification: true });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/verify-email', authMiddleware, async (req, res) => {
-    try {
-        const { code } = req.body;
-        const user = await User.findById(req.user.id);
-        if (!user) return res.status(404).json({ error: 'User not found' });
-        if (user.isEmailVerified) return res.json({ success: true, message: 'Email already verified!' });
-        if (!user.emailVerificationCode || !user.emailVerificationExpires) {
-            // Generate new code if none exists
-            const newCode = Math.floor(100000 + Math.random() * 900000).toString();
-            user.emailVerificationCode = newCode;
-            user.emailVerificationExpires = new Date(Date.now() + 30 * 60 * 1000);
-            await user.save();
-            sendEmail(user.email, 'Verification Code - AGNEWS', '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif"><h1 style="color:#E53935">AGASOBANUYE MOVIES</h1><p>Your verification code is:</p><h1 style="color:#FFC107;font-size:3rem;letter-spacing:5px">' + newCode + '</h1></div>');
-            return res.status(400).json({ error: 'A new code has been sent. Please check your email.' });
-        }
-        if (user.emailVerificationCode !== code) return res.status(400).json({ error: 'Invalid verification code.' });
-        if (new Date() > user.emailVerificationExpires) {
-            const newCode = Math.floor(100000 + Math.random() * 900000).toString();
-            user.emailVerificationCode = newCode;
-            user.emailVerificationExpires = new Date(Date.now() + 30 * 60 * 1000);
-            await user.save();
-            sendEmail(user.email, 'New Code - AGNEWS', '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif"><h1 style="color:#E53935">AGASOBANUYE MOVIES</h1><p>Your new code is:</p><h1 style="color:#FFC107;font-size:3rem;letter-spacing:5px">' + newCode + '</h1></div>');
-            return res.status(400).json({ error: 'Code expired. A new code has been sent.' });
-        }
-        user.isEmailVerified = true; user.emailVerificationCode = undefined; user.emailVerificationExpires = undefined;
-        user.notifications.push({ message: 'Email verified successfully! You can now subscribe.', type: 'success' });
-        await user.save();
-        res.json({ success: true, message: 'Email verified! You can now subscribe to any plan.' });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/resend-verification', authMiddleware, async (req, res) => {
-    try {
-        const user = await User.findById(req.user.id);
-        if (!user) return res.status(404).json({ error: 'User not found' });
-        if (user.isEmailVerified) return res.json({ success: true, message: 'Email already verified!' });
-        const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-        user.emailVerificationCode = verificationCode; user.emailVerificationExpires = new Date(Date.now() + 30 * 60 * 1000);
-        await user.save();
-        sendEmail(user.email, 'Verification Code - AGNEWS', '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif"><h1 style="color:#E53935">AGASOBANUYE MOVIES</h1><p>Your verification code is:</p><h1 style="color:#FFC107;font-size:3rem;letter-spacing:5px">' + verificationCode + '</h1></div>');
-        res.json({ success: true, message: 'New code sent!' });
+        res.status(201).json({ token, user: { id: user._id, email, role: user.role, fullName: user.fullName, subscription: user.subscription, isEmailVerified: true }, message: 'Account created! Welcome!' });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -366,7 +278,7 @@ app.post('/api/login', async (req, res) => {
             const daysLeft = Math.ceil((new Date(user.subscription.expiresAt) - new Date()) / (1000 * 60 * 60 * 24));
             expiringSoon = daysLeft <= 2;
         }
-        res.json({ token, user: { id: user._id, email: user.email, role: user.role, fullName: user.fullName, subscription: user.subscription, deviceCount: user.deviceCount, isEmailVerified: user.isEmailVerified }, expiringSoon, message: expiringSoon ? 'Subscription expiring soon!' : 'Welcome back!' });
+        res.json({ token, user: { id: user._id, email: user.email, role: user.role, fullName: user.fullName, subscription: user.subscription, deviceCount: user.deviceCount, isEmailVerified: true }, expiringSoon, message: expiringSoon ? 'Subscription expiring soon!' : 'Welcome back!' });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -427,7 +339,6 @@ app.get('/api/contents/:id', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Get streaming URL for specific part/episode
 app.get('/api/contents/:id/stream', async (req, res) => {
     try {
         const content = await Content.findById(req.params.id);
@@ -456,7 +367,6 @@ app.get('/api/contents/:id/stream', async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Download endpoint
 app.post('/api/contents/:id/download', authMiddleware, async (req, res) => {
     try {
         const content = await Content.findById(req.params.id);
@@ -495,7 +405,6 @@ app.post('/api/contents/:id/download', authMiddleware, async (req, res) => {
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Get all parts/episodes
 app.get('/api/contents/:id/parts', async (req, res) => {
     try {
         const content = await Content.findById(req.params.id);
@@ -537,7 +446,7 @@ app.post('/api/comments/:contentId/:commentId/like', async (req, res) => { const
 // ========== PLANS ==========
 app.get('/api/plans', (req, res) => { res.json({ free: { name: 'Free', weekly: 0, monthly: 0, quarterly: 0, yearly: 0, features: ['Free movies', 'Ads', '480p'] }, basic: { name: 'Basic', weekly: 300, monthly: 500, quarterly: 1200, yearly: 3000, features: ['Free+Basic', 'Fewer ads', '720p', 'Download'] }, standard: { name: 'Standard', weekly: 500, monthly: 1000, quarterly: 2500, yearly: 7000, features: ['Most movies', 'Very few ads', '1080p', 'HD Download'] }, premium: { name: 'Premium', weekly: 1000, monthly: 2000, quarterly: 5000, yearly: 15000, features: ['Almost all', 'Almost no ads', '2K'] }, ultimate: { name: 'Ultimate', weekly: 2000, monthly: 5000, quarterly: 12000, yearly: 30000, features: ['ALL movies', 'NO ADS', '4K', 'VIP'] } }); });
 
-// ========== SUBSCRIBE - WITH EMAIL VERIFICATION CHECK ==========
+// ========== SUBSCRIBE ==========
 app.post('/api/subscribe', authMiddleware, upload.single('paymentScreenshot'), async (req, res) => {
     try {
         const { plan, duration, phone, senderName, paymentMethod } = req.body;
@@ -546,23 +455,7 @@ app.post('/api/subscribe', authMiddleware, upload.single('paymentScreenshot'), a
         if (!phone || !senderName) return res.status(400).json({ error: 'Phone and name required' });
         if (!req.file) return res.status(400).json({ error: 'Payment screenshot is required! Please upload proof of payment.' });
         
-        // Check email verification
         const user = await User.findById(req.user.id);
-        if (!user.isEmailVerified) {
-            // Auto-send new verification code
-            const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
-            user.emailVerificationCode = verificationCode;
-            user.emailVerificationExpires = new Date(Date.now() + 30 * 60 * 1000);
-            await user.save();
-            sendEmail(user.email, 'Verify Your Email to Subscribe - AGNEWS',
-                '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif">' +
-                '<h1 style="color:#E53935">AGASOBANUYE MOVIES</h1><h2>Verify Your Email</h2>' +
-                '<p>You need to verify your email before subscribing.</p>' +
-                '<h1 style="color:#FFC107;font-size:3rem;letter-spacing:5px">' + verificationCode + '</h1>' +
-                '<p style="color:#b3b3b3">Code expires in 30 minutes.</p></div>');
-            return res.status(403).json({ error: 'Email not verified. A verification code has been sent to your email.', needsVerification: true, email: user.email });
-        }
-        
         const txn = await Transaction.create({ userId: req.user._id, userEmail: req.user.email, userFullName: req.user.fullName, phone, amount: plans[plan][duration], plan, duration, paymentMethod: paymentMethod || 'momo', screenshotUrl: '/uploads/payments/' + req.file.filename, senderName, status: 'pending' });
         await User.findByIdAndUpdate(req.user._id, { 'subscription.status': 'pending', 'subscription.plan': plan, 'subscription.duration': duration });
         user.notifications.push({ message: 'Payment submitted! Waiting for admin approval.', type: 'subscription' });
@@ -647,19 +540,8 @@ app.put('/api/admin/subscriptions/:id', authMiddleware, adminMiddleware, async (
         const days = { weekly: 7, monthly: 30, quarterly: 90, yearly: 365 };
         const exp = new Date(); exp.setDate(exp.getDate() + (days[txn.duration] || 30));
         await User.findByIdAndUpdate(txn.userId, { subscription: { plan: txn.plan, duration: txn.duration, expiresAt: exp, startDate: new Date(), status: 'active', maxDevices: 6, approvedBy: req.user.email, approvedAt: new Date() }, isFlagged: false, devices: [], deviceCount: 0 });
-        if (user) {
-            user.notifications.push({ message: 'Your ' + txn.plan.toUpperCase() + ' subscription has been APPROVED! Enjoy streaming!', type: 'success' });
-            await user.save();
-            sendEmail(user.email, 'Subscription Approved! - AGASOBANUYE MOVIES',
-                '<div style="background:#0a0a0a;color:#fff;padding:2rem;border-radius:20px;text-align:center;font-family:sans-serif">' +
-                '<h1 style="color:#4CAF50">Subscription Approved!</h1>' +
-                '<h2>Your ' + txn.plan.toUpperCase() + ' plan is now active!</h2>' +
-                '<p>Duration: ' + txn.duration + '</p>' +
-                '<p>Expires: ' + exp.toLocaleDateString() + '</p>' +
-                '<p>Amount Paid: ' + (txn.amount || 0).toLocaleString() + ' RWF</p>' +
-                '<p style="color:#b3b3b3">Enjoy unlimited streaming!</p></div>');
-        }
-        res.json({ success: true, message: 'Approved! User notified by email.' });
+        if (user) { user.notifications.push({ message: 'Your ' + txn.plan.toUpperCase() + ' subscription has been APPROVED!', type: 'success' }); await user.save(); }
+        res.json({ success: true, message: 'Approved!' });
     } else if (status === 'rejected') {
         await User.findByIdAndUpdate(txn.userId, { 'subscription.status': 'none', 'subscription.plan': 'free', 'subscription.duration': 'none' });
         if (user) { user.notifications.push({ message: 'Your subscription was rejected. Reason: ' + (adminNote || 'No reason provided'), type: 'warning' }); await user.save(); }
