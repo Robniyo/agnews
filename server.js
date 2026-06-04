@@ -9,7 +9,6 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const cloudinary = require('cloudinary').v2;
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
 const app = express();
 
@@ -48,7 +47,8 @@ const ViewRecordSchema = new mongoose.Schema({
 
 const DownloadRecordSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-    deviceId: String, downloadedAt: { type: Date, default: Date.now }
+    deviceId: String, partIndex: Number, seasonIndex: Number, episodeIndex: Number,
+    downloadedAt: { type: Date, default: Date.now }
 });
 
 const NotificationSchema = new mongoose.Schema({
@@ -164,7 +164,6 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 2 * 1024 * 1024 * 1024 } });
 
-// Cloudinary upload helper
 async function uploadToCloudinary(file, folder, resourceType = 'image') {
     try {
         const result = await cloudinary.uploader.upload(file.path, {
@@ -231,6 +230,11 @@ function getStreamUrl(url) {
 function getDownloadUrl(url) {
     if (!url) return '';
     return url;
+}
+
+function canStream(url) {
+    if (!url) return false;
+    return url.includes('pixeldrain.com') || url.includes('youtube.com') || url.includes('vimeo.com');
 }
 
 // ========== CREATE ADMINS ==========
@@ -387,21 +391,23 @@ app.get('/api/contents/:id/stream', async (req, res) => {
             content.viewedBy.push({ userId: userId, deviceId: deviceId, viewedAt: new Date() });
             await content.save();
         }
-        res.json({ streamUrl: streamUrl, title: content.title, quality: content.quality });
+        res.json({ streamUrl: streamUrl, canStream: canStream(videoUrl), title: content.title, quality: content.quality });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/contents/:id/download', authMiddleware, async (req, res) => {
+// Download endpoint - works for free content without login
+app.post('/api/contents/:id/download', async (req, res) => {
     try {
         const content = await Content.findById(req.params.id);
         if (!content) return res.status(404).json({ error: 'Content not found' });
-        const userPlan = req.user.subscription.plan || 'free';
-        const userStatus = req.user.subscription.status || 'none';
+        
         const partIndex = parseInt(req.body?.part) || 0;
         const seasonIndex = parseInt(req.body?.season) || 0;
         const episodeIndex = parseInt(req.body?.episode) || 0;
+        
         let videoUrl = '';
         let itemAccessLevel = 'free';
+        
         if (content.type === 'movie' && content.parts && content.parts.length > partIndex) {
             videoUrl = content.parts[partIndex].videoUrl;
             itemAccessLevel = content.parts[partIndex].accessLevel || content.accessLevel || 'free';
@@ -413,19 +419,43 @@ app.post('/api/contents/:id/download', authMiddleware, async (req, res) => {
         } else if (content.seasons?.[0]?.episodes?.[0]?.videoUrl) {
             videoUrl = content.seasons[0].episodes[0].videoUrl;
         }
+        
         if (!videoUrl) return res.status(404).json({ error: 'No video available for download' });
-        if (itemAccessLevel !== 'free' && userStatus !== 'active') return res.status(403).json({ error: 'This part requires a subscription. Your subscription is pending approval.' });
-        if (!checkAccessLevel(userPlan, itemAccessLevel)) return res.status(403).json({ error: 'Subscribe to ' + itemAccessLevel.toUpperCase() + ' plan to download this part!' });
+        
+        // Check if premium content requires auth
+        if (itemAccessLevel !== 'free') {
+            const token = req.header('Authorization')?.replace('Bearer ', '');
+            if (!token) return res.status(401).json({ error: 'Login required for premium content.' });
+            try {
+                const verified = jwt.verify(token, process.env.JWT_SECRET || 'agnews_final_secret_2026');
+                const user = await User.findById(verified.id);
+                if (!user) return res.status(401).json({ error: 'User not found.' });
+                const userPlan = user.subscription.plan || 'free';
+                const userStatus = user.subscription.status || 'none';
+                if (userStatus !== 'active') return res.status(403).json({ error: 'Your subscription is pending approval.' });
+                if (!checkAccessLevel(userPlan, itemAccessLevel)) return res.status(403).json({ error: 'Subscribe to ' + itemAccessLevel.toUpperCase() + ' plan to download!' });
+            } catch (err) {
+                return res.status(401).json({ error: 'Please login to download premium content.' });
+            }
+        }
+        
         const downloadUrl = getDownloadUrl(videoUrl);
-        const userId = req.user.id;
-        let alreadyDownloaded = content.downloadedBy && content.downloadedBy.some(d => d.userId && d.userId.toString() === userId.toString());
+        
+        // Track download
+        const userId = req.user?.id || null;
+        const deviceId = req.headers['x-device-id'] || req.ip || 'unknown';
+        let alreadyDownloaded = content.downloadedBy && content.downloadedBy.some(d => 
+            (userId && d.userId && d.userId.toString() === userId.toString()) || 
+            (!userId && d.deviceId === deviceId)
+        );
         if (!alreadyDownloaded) {
             content.downloads = (content.downloads || 0) + 1;
             if (!content.downloadedBy) content.downloadedBy = [];
-            content.downloadedBy.push({ userId: userId, deviceId: req.ip, downloadedAt: new Date() });
+            content.downloadedBy.push({ userId: userId, deviceId: deviceId, partIndex, seasonIndex, episodeIndex, downloadedAt: new Date() });
             await content.save();
         }
-        res.json({ downloadUrl: downloadUrl, quality: content.quality, title: content.title });
+        
+        res.json({ downloadUrl: downloadUrl, quality: content.quality, title: content.title, canStream: canStream(videoUrl) });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -439,7 +469,8 @@ app.get('/api/contents/:id/parts', async (req, res) => {
                 index: i, type: 'part', number: p.partNumber || String(i + 1),
                 title: p.title || 'Part ' + (i + 1), videoUrl: p.videoUrl,
                 videoSource: p.videoSource, accessLevel: p.accessLevel || 'free',
-                streamUrl: getStreamUrl(p.videoUrl), downloadUrl: getDownloadUrl(p.videoUrl)
+                streamUrl: getStreamUrl(p.videoUrl), downloadUrl: getDownloadUrl(p.videoUrl),
+                canStream: canStream(p.videoUrl)
             }));
         } else if (content.type === 'series' && content.seasons) {
             content.seasons.forEach((season, si) => {
@@ -452,7 +483,8 @@ app.get('/api/contents/:id/parts', async (req, res) => {
                             seasonTitle: season.title || 'Season ' + season.seasonNumber,
                             videoUrl: ep.videoUrl, videoSource: ep.videoSource,
                             accessLevel: ep.accessLevel || 'free',
-                            streamUrl: getStreamUrl(ep.videoUrl), downloadUrl: getDownloadUrl(ep.videoUrl)
+                            streamUrl: getStreamUrl(ep.videoUrl), downloadUrl: getDownloadUrl(ep.videoUrl),
+                            canStream: canStream(ep.videoUrl)
                         });
                     });
                 }
@@ -513,7 +545,19 @@ app.post('/api/admin/upload', authMiddleware, adminMiddleware, upload.fields([{ 
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/admin/contents/:id', authMiddleware, adminMiddleware, async (req, res) => { const c = await Content.findByIdAndUpdate(req.params.id, { ...req.body, updatedAt: new Date() }, { new: true }); if (!c) return res.status(404).json({ error: 'Not found' }); res.json({ success: true, content: c }); });
+// Edit content with optional thumbnail upload
+app.put('/api/admin/contents/:id', authMiddleware, adminMiddleware, upload.single('thumbnail'), async (req, res) => {
+    try {
+        const updateData = { ...req.body, updatedAt: new Date() };
+        if (req.file) {
+            updateData.thumbnailUrl = await uploadToCloudinary(req.file, 'thumbnails');
+        }
+        const c = await Content.findByIdAndUpdate(req.params.id, updateData, { new: true });
+        if (!c) return res.status(404).json({ error: 'Not found' });
+        res.json({ success: true, content: c });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.delete('/api/admin/contents/:id', authMiddleware, adminMiddleware, async (req, res) => { await Content.findByIdAndDelete(req.params.id); res.json({ success: true }); });
 
 app.post('/api/admin/movies/:id/part', authMiddleware, adminMiddleware, upload.single('video'), async (req, res) => {
