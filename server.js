@@ -255,17 +255,23 @@ function canStream(url) { if (!url) return false; return url.includes('pixeldrai
 async function createAdmins() {
     const admins = [
         { email: 'agasobanuyenews@gmail.com', password: 'Joselove@250', fullName: 'Nirobwimba - Head Admin & CEO', adminLevel: 'head' },
-        { email: 'vugatime@gmail.com', password: 'vugatime@123', fullName: 'Vugatime Media - Content Director', adminLevel: 'sub' },
+        { email: 'vugatime@gmail.com', password: 'vugatime@123', fullName: 'Vugatime Media - Sub Admin', adminLevel: 'sub' },
         { email: 'niromusicvibes@gmail.com', password: 'niromusicvibes@123', fullName: 'Content Creator', adminLevel: 'content' }
     ];
     for (const admin of admins) {
-        if (!await User.findOne({ email: admin.email })) {
+        const existing = await User.findOne({ email: admin.email });
+        if (!existing) {
             await User.create({
                 email: admin.email, password: await bcrypt.hash(admin.password, 10), fullName: admin.fullName, role: 'admin', adminLevel: admin.adminLevel,
                 isEmailVerified: true,
                 subscription: { plan: 'ultimate', duration: 'yearly', expiresAt: new Date('2030-12-31'), startDate: new Date(), status: 'active', maxDevices: 100 }
             });
             console.log('Admin created: ' + admin.email);
+        } else if (!existing.adminLevel) {
+            existing.adminLevel = admin.adminLevel;
+            existing.fullName = admin.fullName;
+            await existing.save();
+            console.log('Admin updated: ' + admin.email);
         }
     }
 }
