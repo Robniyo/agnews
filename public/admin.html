@@ -1,4 +1,4 @@
-<!-- cache bust v9 - modals fix -->
+<!-- cache bust v10 - all sections fixed + modals + perms -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -189,7 +189,8 @@ window.approveSub=approveSub;window.rejectSub=rejectSub;window.archiveSub=archiv
 window.clearFlag=clearFlag;window.terminateFlag=terminateFlag;window.deleteComment=deleteComment;
 window.toggleAd=toggleAd;window.deleteAd=deleteAd;window.processWithdrawal=processWithdrawal;
 window.filterManageContent=filterManageContent;window.logout=logout;
-document.addEventListener('DOMContentLoaded',function(){var em=document.getElementById('editModal');var sm=document.getElementById('screenshotModal');if(em)document.body.appendChild(em);if(sm)document.body.appendChild(sm)})
+setTimeout(function(){var em=document.getElementById('editModal');var sm=document.getElementById('screenshotModal');if(em&&em.parentElement)document.body.appendChild(em);if(sm&&sm.parentElement)document.body.appendChild(sm)},500);
+setTimeout(function(){var sections=['dashboardSection','uploadSection','manageSection','addpartSection','announcementsSection','subscriptionsSection','usersSection','flaggedSection','commentsSection','adsSection','paymentsSection','withdrawalsSection'];sections.forEach(function(id){var el=document.getElementById(id);if(el&&el.parentElement&&el.parentElement.id!=='mainContent'){document.getElementById('mainContent').appendChild(el)}})},600);
 </script>
 </body>
 </html>
