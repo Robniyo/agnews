@@ -58,6 +58,7 @@
 <div class="scroll-top" id="scrollTop" onclick="window.scrollTo({top:0,behavior:'smooth'})"><span class="material-symbols-outlined">arrow_upward</span></div>
 
 <div class="hero"><div class="hero-content"><h1 class="hero-title">AGASOBANUYE MOVIES</h1><p class="hero-tagline">Your Cinema, Your Rules</p><p class="hero-subtagline">Stream Free or Go Premium</p><p class="hero-subtitle">East Africa's #1 Movie Streaming Platform<br>Watch, Download & Share</p><div class="hero-badges"><div class="hero-badge"><span class="material-symbols-outlined">play_circle</span> Stream Online</div><div class="hero-badge"><span class="material-symbols-outlined">download</span> Download</div><div class="hero-badge"><span class="material-symbols-outlined">share</span> Share</div></div><div class="hero-buttons"><button class="btn btn-red btn-lg" onclick="showPlans()"><span class="material-symbols-outlined">play_arrow</span> Start Watching</button><button class="btn btn-outline btn-lg" onclick="filterMovies('free')"><span class="material-symbols-outlined">redeem</span> Free Movies</button></div></div></div>
+<button class="btn btn-outline btn-lg" id="installBtn" onclick="installApp()" style="display:none;background:var(--green);color:#fff;border-color:var(--green)"><span class="material-symbols-outlined">download</span> Install App</button>
 
 <div id="announcementBar" class="announcement-bar"></div>
 
@@ -160,6 +161,7 @@ async function submitPayment(){if(!selectedPlan){showMessage('Error','Please sel
 
 (function(){var p=new URLSearchParams(window.location.search);var mid=p.get('movie');if(mid){setTimeout(function(){openContent(mid)},1500)}else{setTimeout(function(){loadAllContent()},500)}})();
 updateUserInfo();
+var deferredPrompt;window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();deferredPrompt=e;document.getElementById('installBtn').style.display='inline-flex'});function installApp(){if(deferredPrompt){deferredPrompt.prompt();deferredPrompt.userChoice.then(function(r){if(r.outcome==='accepted')document.getElementById('installBtn').style.display='none';deferredPrompt=null})}}    
 </script>
 </body>
 </html>
