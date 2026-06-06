@@ -25,7 +25,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/agnews')
-    .then(() => console.log('MongoDB Connected - Deploy v8'))
+    .then(() => console.log('MongoDB Connected - Deploy v9 - ' + new Date().toISOString()))
     .catch(err => console.log('MongoDB Error:', err));
 
 // Cloudinary Configuration - WITH FALLBACKS
