@@ -61,7 +61,8 @@ const UserSchema = new mongoose.Schema({
     password: { type: String, required: true },
     fullName: { type: String, default: '' },
     phone: { type: String, default: '' },
-    role: { type: String, enum: ['user', 'admin'], default: 'user' },
+    role: { type: String, enum: ['user', 'content_creator', 'admin'], default: 'user' },
+    adminLevel: { type: String, enum: ['head', 'sub', 'content'], default: null },
     isEmailVerified: { type: Boolean, default: true },
     subscription: {
         plan: { type: String, enum: ['free', 'basic', 'standard', 'premium', 'ultimate'], default: 'free' },
@@ -112,7 +113,14 @@ const ContentSchema = new mongoose.Schema({
     views: { type: Number, default: 0 }, downloads: { type: Number, default: 0 },
     viewedBy: [ViewRecordSchema], downloadedBy: [DownloadRecordSchema],
     parts: [PartSchema], seasons: [SeasonSchema],
-    comments: [{ userName: String, text: String, likes: { type: Number, default: 0 }, createdAt: { type: Date, default: Date.now } }],
+    comments: [{
+        userName: String,
+        text: String,
+        likes: { type: Number, default: 0 },
+        likedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+        likedByDevice: [String],
+        createdAt: { type: Date, default: Date.now }
+    }],
     tags: [String], uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, uploadedByEmail: String,
     uploadedAt: { type: Date, default: Date.now }, updatedAt: { type: Date, default: Date.now }
 });
@@ -149,6 +157,17 @@ const AdSchema = new mongoose.Schema({
 });
 const Ad = mongoose.model('Ad', AdSchema);
 
+const AnnouncementSchema = new mongoose.Schema({
+    title: String,
+    message: String,
+    mediaUrl: String,
+    mediaType: { type: String, enum: ['text', 'image', 'video'], default: 'text' },
+    isActive: { type: Boolean, default: true },
+    createdBy: String,
+    createdAt: { type: Date, default: Date.now }
+});
+const Announcement = mongoose.model('Announcement', AnnouncementSchema);
+
 // ========== MULTER WITH CLOUDINARY ==========
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -156,6 +175,7 @@ const storage = multer.diskStorage({
         else if (file.fieldname === 'trailer') cb(null, path.join(__dirname, 'uploads/trailers/'));
         else if (file.fieldname === 'adMedia') cb(null, path.join(__dirname, 'uploads/ads/'));
         else if (file.fieldname === 'paymentScreenshot') cb(null, path.join(__dirname, 'uploads/payments/'));
+        else if (file.fieldname === 'announcementMedia') cb(null, path.join(__dirname, 'uploads/'));
         else cb(null, path.join(__dirname, 'uploads/videos/'));
     },
     filename: (req, file, cb) => {
@@ -208,12 +228,17 @@ const authMiddleware = async (req, res, next) => {
 };
 
 const adminMiddleware = (req, res, next) => {
-    if (!req.user || req.user.role !== 'admin') return res.status(403).json({ error: 'Admin access only.' });
+    if (!req.user || (req.user.role !== 'admin' && req.user.role !== 'content_creator')) return res.status(403).json({ error: 'Admin access only.' });
     next();
 };
 
 const headAdminMiddleware = (req, res, next) => {
-    if (!req.user || req.user.email !== 'agasobanuyenews@gmail.com') return res.status(403).json({ error: 'Only Head Admin can perform this action.' });
+    if (!req.user || req.user.adminLevel !== 'head') return res.status(403).json({ error: 'Only Head Admin can perform this action.' });
+    next();
+};
+
+const subAdminOrAbove = (req, res, next) => {
+    if (!req.user || (req.user.adminLevel !== 'head' && req.user.adminLevel !== 'sub')) return res.status(403).json({ error: 'Access denied.' });
     next();
 };
 
@@ -222,31 +247,21 @@ const checkAccessLevel = (userPlan, contentAccessLevel) => {
     return (planLevels[userPlan] || 0) >= (planLevels[contentAccessLevel] || 0);
 };
 
-function getStreamUrl(url) {
-    if (!url) return '';
-    return url;
-}
-
-function getDownloadUrl(url) {
-    if (!url) return '';
-    return url;
-}
-
-function canStream(url) {
-    if (!url) return false;
-    return url.includes('pixeldrain.com') || url.includes('youtube.com') || url.includes('vimeo.com');
-}
+function getStreamUrl(url) { if (!url) return ''; return url; }
+function getDownloadUrl(url) { if (!url) return ''; return url; }
+function canStream(url) { if (!url) return false; return url.includes('pixeldrain.com') || url.includes('youtube.com') || url.includes('vimeo.com') || url.includes('mega.nz'); }
 
 // ========== CREATE ADMINS ==========
 async function createAdmins() {
     const admins = [
-        { email: 'agasobanuyenews@gmail.com', password: 'Joselove@250', fullName: 'Nirobwimba - Head Admin & CEO' },
-        { email: 'vugatime@gmail.com', password: 'vugatime@123', fullName: 'Vugatime Media - Content Director' }
+        { email: 'agasobanuyenews@gmail.com', password: 'Joselove@250', fullName: 'Nirobwimba - Head Admin & CEO', adminLevel: 'head' },
+        { email: 'vugatime@gmail.com', password: 'vugatime@123', fullName: 'Vugatime Media - Content Director', adminLevel: 'sub' },
+        { email: 'niromusicvibes@gmail.com', password: 'niromusicvibes@123', fullName: 'Content Creator', adminLevel: 'content' }
     ];
     for (const admin of admins) {
         if (!await User.findOne({ email: admin.email })) {
             await User.create({
-                email: admin.email, password: await bcrypt.hash(admin.password, 10), fullName: admin.fullName, role: 'admin',
+                email: admin.email, password: await bcrypt.hash(admin.password, 10), fullName: admin.fullName, role: 'admin', adminLevel: admin.adminLevel,
                 isEmailVerified: true,
                 subscription: { plan: 'ultimate', duration: 'yearly', expiresAt: new Date('2030-12-31'), startDate: new Date(), status: 'active', maxDevices: 100 }
             });
@@ -306,7 +321,7 @@ app.post('/api/login', async (req, res) => {
             const daysLeft = Math.ceil((new Date(user.subscription.expiresAt) - new Date()) / (1000 * 60 * 60 * 24));
             expiringSoon = daysLeft <= 2;
         }
-        res.json({ token, user: { id: user._id, email: user.email, role: user.role, fullName: user.fullName, subscription: user.subscription, deviceCount: user.deviceCount, isEmailVerified: true }, expiringSoon, message: expiringSoon ? 'Subscription expiring soon!' : 'Welcome back!' });
+        res.json({ token, user: { id: user._id, email: user.email, role: user.role, adminLevel: user.adminLevel, fullName: user.fullName, subscription: user.subscription, deviceCount: user.deviceCount, isEmailVerified: true }, expiringSoon, message: expiringSoon ? 'Subscription expiring soon!' : 'Welcome back!' });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -322,17 +337,25 @@ app.get('/api/me', authMiddleware, async (req, res) => {
     res.json({ ...user.toObject(), expiryAlert, unreadNotifications });
 });
 
-app.get('/api/notifications', authMiddleware, async (req, res) => {
-    const user = await User.findById(req.user.id);
-    res.json(user.notifications || []);
-});
+app.get('/api/notifications', authMiddleware, async (req, res) => { const user = await User.findById(req.user.id); res.json(user.notifications || []); });
+app.put('/api/notifications/read', authMiddleware, async (req, res) => { const user = await User.findById(req.user.id); user.notifications.forEach(n => n.read = true); await user.save(); res.json({ success: true }); });
 
-app.put('/api/notifications/read', authMiddleware, async (req, res) => {
-    const user = await User.findById(req.user.id);
-    user.notifications.forEach(n => n.read = true);
-    await user.save();
-    res.json({ success: true });
+// ========== ANNOUNCEMENTS ROUTES ==========
+app.get('/api/announcements', async (req, res) => { res.json(await Announcement.find({ isActive: true }).sort({ createdAt: -1 }).limit(1)); });
+app.get('/api/admin/announcements', authMiddleware, adminMiddleware, async (req, res) => { res.json(await Announcement.find().sort({ createdAt: -1 })); });
+app.post('/api/admin/announcements', authMiddleware, subAdminOrAbove, upload.single('announcementMedia'), async (req, res) => {
+    try {
+        const { title, message, mediaType } = req.body;
+        let mediaUrl = '';
+        if (req.file) {
+            mediaUrl = await uploadToCloudinary(req.file, 'announcements', mediaType === 'video' ? 'video' : 'image');
+        }
+        const announcement = await Announcement.create({ title, message: message || '', mediaUrl, mediaType: mediaType || 'text', createdBy: req.user.email });
+        res.json({ success: true, announcement });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
+app.put('/api/admin/announcements/:id', authMiddleware, subAdminOrAbove, async (req, res) => { await Announcement.findByIdAndUpdate(req.params.id, req.body); res.json({ success: true }); });
+app.delete('/api/admin/announcements/:id', authMiddleware, headAdminMiddleware, async (req, res) => { await Announcement.findByIdAndDelete(req.params.id); res.json({ success: true }); });
 
 // ========== CONTENT ROUTES ==========
 app.get('/api/contents', async (req, res) => {
@@ -375,54 +398,28 @@ app.get('/api/contents/:id/stream', async (req, res) => {
         const seasonIndex = parseInt(req.query.season) || 0;
         const episodeIndex = parseInt(req.query.episode) || 0;
         let videoUrl = '';
-        if (content.type === 'movie' && content.parts && content.parts.length > partIndex) {
-            videoUrl = content.parts[partIndex].videoUrl;
-        } else if (content.type === 'series' && content.seasons && content.seasons[seasonIndex] && content.seasons[seasonIndex].episodes && content.seasons[seasonIndex].episodes[episodeIndex]) {
-            videoUrl = content.seasons[seasonIndex].episodes[episodeIndex].videoUrl;
-        }
+        if (content.type === 'movie' && content.parts && content.parts.length > partIndex) { videoUrl = content.parts[partIndex].videoUrl; }
+        else if (content.type === 'series' && content.seasons && content.seasons[seasonIndex] && content.seasons[seasonIndex].episodes && content.seasons[seasonIndex].episodes[episodeIndex]) { videoUrl = content.seasons[seasonIndex].episodes[episodeIndex].videoUrl; }
         if (!videoUrl) return res.status(404).json({ error: 'No video URL found' });
         const streamUrl = getStreamUrl(videoUrl);
-        const userId = req.user?.id || null;
-        const deviceId = req.headers['x-device-id'] || req.ip || 'unknown';
+        const userId = req.user?.id || null; const deviceId = req.headers['x-device-id'] || req.ip || 'unknown';
         let alreadyViewed = content.viewedBy && content.viewedBy.some(v => (userId && v.userId && v.userId.toString() === userId.toString()) || (!userId && v.deviceId === deviceId));
-        if (!alreadyViewed) {
-            content.views = (content.views || 0) + 1;
-            if (!content.viewedBy) content.viewedBy = [];
-            content.viewedBy.push({ userId: userId, deviceId: deviceId, viewedAt: new Date() });
-            await content.save();
-        }
-        res.json({ streamUrl: streamUrl, canStream: canStream(videoUrl), title: content.title, quality: content.quality });
+        if (!alreadyViewed) { content.views = (content.views || 0) + 1; if (!content.viewedBy) content.viewedBy = []; content.viewedBy.push({ userId, deviceId, viewedAt: new Date() }); await content.save(); }
+        res.json({ streamUrl, canStream: canStream(videoUrl), title: content.title, quality: content.quality });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Download endpoint - works for free content without login
 app.post('/api/contents/:id/download', async (req, res) => {
     try {
         const content = await Content.findById(req.params.id);
         if (!content) return res.status(404).json({ error: 'Content not found' });
-        
-        const partIndex = parseInt(req.body?.part) || 0;
-        const seasonIndex = parseInt(req.body?.season) || 0;
-        const episodeIndex = parseInt(req.body?.episode) || 0;
-        
-        let videoUrl = '';
-        let itemAccessLevel = 'free';
-        
-        if (content.type === 'movie' && content.parts && content.parts.length > partIndex) {
-            videoUrl = content.parts[partIndex].videoUrl;
-            itemAccessLevel = content.parts[partIndex].accessLevel || content.accessLevel || 'free';
-        } else if (content.type === 'series' && content.seasons && content.seasons[seasonIndex] && content.seasons[seasonIndex].episodes && content.seasons[seasonIndex].episodes[episodeIndex]) {
-            videoUrl = content.seasons[seasonIndex].episodes[episodeIndex].videoUrl;
-            itemAccessLevel = content.seasons[seasonIndex].episodes[episodeIndex].accessLevel || content.accessLevel || 'free';
-        } else if (content.parts?.[0]?.videoUrl) {
-            videoUrl = content.parts[0].videoUrl;
-        } else if (content.seasons?.[0]?.episodes?.[0]?.videoUrl) {
-            videoUrl = content.seasons[0].episodes[0].videoUrl;
-        }
-        
+        const partIndex = parseInt(req.body?.part) || 0; const seasonIndex = parseInt(req.body?.season) || 0; const episodeIndex = parseInt(req.body?.episode) || 0;
+        let videoUrl = ''; let itemAccessLevel = 'free';
+        if (content.type === 'movie' && content.parts && content.parts.length > partIndex) { videoUrl = content.parts[partIndex].videoUrl; itemAccessLevel = content.parts[partIndex].accessLevel || content.accessLevel || 'free'; }
+        else if (content.type === 'series' && content.seasons && content.seasons[seasonIndex] && content.seasons[seasonIndex].episodes && content.seasons[seasonIndex].episodes[episodeIndex]) { videoUrl = content.seasons[seasonIndex].episodes[episodeIndex].videoUrl; itemAccessLevel = content.seasons[seasonIndex].episodes[episodeIndex].accessLevel || content.accessLevel || 'free'; }
+        else if (content.parts?.[0]?.videoUrl) { videoUrl = content.parts[0].videoUrl; }
+        else if (content.seasons?.[0]?.episodes?.[0]?.videoUrl) { videoUrl = content.seasons[0].episodes[0].videoUrl; }
         if (!videoUrl) return res.status(404).json({ error: 'No video available for download' });
-        
-        // Check if premium content requires auth
         if (itemAccessLevel !== 'free') {
             const token = req.header('Authorization')?.replace('Bearer ', '');
             if (!token) return res.status(401).json({ error: 'Login required for premium content.' });
@@ -430,32 +427,16 @@ app.post('/api/contents/:id/download', async (req, res) => {
                 const verified = jwt.verify(token, process.env.JWT_SECRET || 'agnews_final_secret_2026');
                 const user = await User.findById(verified.id);
                 if (!user) return res.status(401).json({ error: 'User not found.' });
-                const userPlan = user.subscription.plan || 'free';
-                const userStatus = user.subscription.status || 'none';
+                const userPlan = user.subscription.plan || 'free'; const userStatus = user.subscription.status || 'none';
                 if (userStatus !== 'active') return res.status(403).json({ error: 'Your subscription is pending approval.' });
                 if (!checkAccessLevel(userPlan, itemAccessLevel)) return res.status(403).json({ error: 'Subscribe to ' + itemAccessLevel.toUpperCase() + ' plan to download!' });
-            } catch (err) {
-                return res.status(401).json({ error: 'Please login to download premium content.' });
-            }
+            } catch (err) { return res.status(401).json({ error: 'Please login to download premium content.' }); }
         }
-        
         const downloadUrl = getDownloadUrl(videoUrl);
-        
-        // Track download
-        const userId = req.user?.id || null;
-        const deviceId = req.headers['x-device-id'] || req.ip || 'unknown';
-        let alreadyDownloaded = content.downloadedBy && content.downloadedBy.some(d => 
-            (userId && d.userId && d.userId.toString() === userId.toString()) || 
-            (!userId && d.deviceId === deviceId)
-        );
-        if (!alreadyDownloaded) {
-            content.downloads = (content.downloads || 0) + 1;
-            if (!content.downloadedBy) content.downloadedBy = [];
-            content.downloadedBy.push({ userId: userId, deviceId: deviceId, partIndex, seasonIndex, episodeIndex, downloadedAt: new Date() });
-            await content.save();
-        }
-        
-        res.json({ downloadUrl: downloadUrl, quality: content.quality, title: content.title, canStream: canStream(videoUrl) });
+        const userId = req.user?.id || null; const deviceId = req.headers['x-device-id'] || req.ip || 'unknown';
+        let alreadyDownloaded = content.downloadedBy && content.downloadedBy.some(d => (userId && d.userId && d.userId.toString() === userId.toString()) || (!userId && d.deviceId === deviceId));
+        if (!alreadyDownloaded) { content.downloads = (content.downloads || 0) + 1; if (!content.downloadedBy) content.downloadedBy = []; content.downloadedBy.push({ userId, deviceId, partIndex, seasonIndex, episodeIndex, downloadedAt: new Date() }); await content.save(); }
+        res.json({ downloadUrl, quality: content.quality, title: content.title, canStream: canStream(videoUrl) });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -465,39 +446,38 @@ app.get('/api/contents/:id/parts', async (req, res) => {
         if (!content) return res.status(404).json({ error: 'Content not found' });
         let items = [];
         if (content.type === 'movie' && content.parts) {
-            items = content.parts.map((p, i) => ({
-                index: i, type: 'part', number: p.partNumber || String(i + 1),
-                title: p.title || 'Part ' + (i + 1), videoUrl: p.videoUrl,
-                videoSource: p.videoSource, accessLevel: p.accessLevel || 'free',
-                streamUrl: getStreamUrl(p.videoUrl), downloadUrl: getDownloadUrl(p.videoUrl),
-                canStream: canStream(p.videoUrl)
-            }));
+            items = content.parts.map((p, i) => ({ index: i, type: 'part', number: p.partNumber || String(i + 1), title: p.title || 'Part ' + (i + 1), videoUrl: p.videoUrl, videoSource: p.videoSource, accessLevel: p.accessLevel || 'free', streamUrl: getStreamUrl(p.videoUrl), downloadUrl: getDownloadUrl(p.videoUrl), canStream: canStream(p.videoUrl) }));
         } else if (content.type === 'series' && content.seasons) {
-            content.seasons.forEach((season, si) => {
-                if (season.episodes) {
-                    season.episodes.forEach((ep, ei) => {
-                        items.push({
-                            index: items.length, type: 'episode', seasonIndex: si, episodeIndex: ei,
-                            number: 'S' + season.seasonNumber + ' E' + ep.episodeNumber,
-                            title: ep.title || 'Episode ' + ep.episodeNumber,
-                            seasonTitle: season.title || 'Season ' + season.seasonNumber,
-                            videoUrl: ep.videoUrl, videoSource: ep.videoSource,
-                            accessLevel: ep.accessLevel || 'free',
-                            streamUrl: getStreamUrl(ep.videoUrl), downloadUrl: getDownloadUrl(ep.videoUrl),
-                            canStream: canStream(ep.videoUrl)
-                        });
-                    });
-                }
-            });
+            content.seasons.forEach((season, si) => { if (season.episodes) { season.episodes.forEach((ep, ei) => { items.push({ index: items.length, type: 'episode', seasonIndex: si, episodeIndex: ei, number: 'S' + season.seasonNumber + ' E' + ep.episodeNumber, title: ep.title || 'Episode ' + ep.episodeNumber, seasonTitle: season.title || 'Season ' + season.seasonNumber, videoUrl: ep.videoUrl, videoSource: ep.videoSource, accessLevel: ep.accessLevel || 'free', streamUrl: getStreamUrl(ep.videoUrl), downloadUrl: getDownloadUrl(ep.videoUrl), canStream: canStream(ep.videoUrl) }); }); }); }
         }
-        res.json({ contentTitle: content.title, contentType: content.type, accessLevel: content.accessLevel, thumbnailUrl: content.thumbnailUrl, items: items, totalItems: items.length });
+        res.json({ contentTitle: content.title, contentType: content.type, accessLevel: content.accessLevel, thumbnailUrl: content.thumbnailUrl, items, totalItems: items.length });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ========== COMMENTS ==========
+// ========== COMMENTS WITH LIKE LIMIT ==========
 app.get('/api/comments/:contentId', async (req, res) => { const content = await Content.findById(req.params.contentId); if (!content) return res.status(404).json({ error: 'Not found' }); res.json((content.comments || []).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))); });
 app.post('/api/comments/:contentId', async (req, res) => { const { userName, text } = req.body; if (!userName || !text) return res.status(400).json({ error: 'Name and comment required' }); const content = await Content.findById(req.params.contentId); if (!content) return res.status(404).json({ error: 'Not found' }); content.comments.push({ userName: userName.trim(), text: text.trim() }); await content.save(); res.json({ success: true }); });
-app.post('/api/comments/:contentId/:commentId/like', async (req, res) => { const content = await Content.findById(req.params.contentId); const comment = content?.comments.id(req.params.commentId); if (!comment) return res.status(404).json({ error: 'Not found' }); comment.likes = (comment.likes || 0) + 1; await content.save(); res.json({ likes: comment.likes }); });
+
+app.post('/api/comments/:contentId/:commentId/like', async (req, res) => {
+    try {
+        const content = await Content.findById(req.params.contentId);
+        const comment = content?.comments.id(req.params.commentId);
+        if (!comment) return res.status(404).json({ error: 'Not found' });
+        const userId = req.user?.id || null;
+        const deviceId = req.headers['x-device-id'] || req.ip || 'unknown';
+        if (!comment.likedBy) comment.likedBy = [];
+        if (!comment.likedByDevice) comment.likedByDevice = [];
+        let alreadyLiked = false;
+        if (userId) { alreadyLiked = comment.likedBy.some(id => id.toString() === userId.toString()); }
+        else { alreadyLiked = comment.likedByDevice.includes(deviceId); }
+        if (alreadyLiked) return res.status(400).json({ error: 'You already liked this comment.' });
+        comment.likes = (comment.likes || 0) + 1;
+        if (userId) comment.likedBy.push(userId);
+        comment.likedByDevice.push(deviceId);
+        await content.save();
+        res.json({ likes: comment.likes });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 // ========== PLANS ==========
 app.get('/api/plans', (req, res) => { res.json({ free: { name: 'Free', weekly: 0, monthly: 0, quarterly: 0, yearly: 0, features: ['Free movies', 'Ads', '480p'] }, basic: { name: 'Basic', weekly: 300, monthly: 500, quarterly: 1200, yearly: 3000, features: ['Free+Basic', 'Fewer ads', '720p', 'Download'] }, standard: { name: 'Standard', weekly: 500, monthly: 1000, quarterly: 2500, yearly: 7000, features: ['Most movies', 'Very few ads', '1080p', 'HD Download'] }, premium: { name: 'Premium', weekly: 1000, monthly: 2000, quarterly: 5000, yearly: 15000, features: ['Almost all', 'Almost no ads', '2K'] }, ultimate: { name: 'Ultimate', weekly: 2000, monthly: 5000, quarterly: 12000, yearly: 30000, features: ['ALL movies', 'NO ADS', '4K', 'VIP'] } }); });
@@ -509,11 +489,10 @@ app.post('/api/subscribe', authMiddleware, upload.single('paymentScreenshot'), a
         const plans = { basic: { weekly: 300, monthly: 500, quarterly: 1200, yearly: 3000 }, standard: { weekly: 500, monthly: 1000, quarterly: 2500, yearly: 7000 }, premium: { weekly: 1000, monthly: 2000, quarterly: 5000, yearly: 15000 }, ultimate: { weekly: 2000, monthly: 5000, quarterly: 12000, yearly: 30000 } };
         if (!plans[plan]?.[duration]) return res.status(400).json({ error: 'Invalid plan' });
         if (!phone || !senderName) return res.status(400).json({ error: 'Phone and name required' });
-        if (!req.file) return res.status(400).json({ error: 'Payment screenshot is required! Please upload proof of payment.' });
-        
+        if (!req.file) return res.status(400).json({ error: 'Payment screenshot is required!' });
         const user = await User.findById(req.user.id);
         const screenshotUrl = await uploadToCloudinary(req.file, 'payments');
-        const txn = await Transaction.create({ userId: req.user._id, userEmail: req.user.email, userFullName: req.user.fullName, phone, amount: plans[plan][duration], plan, duration, paymentMethod: paymentMethod || 'momo', screenshotUrl: screenshotUrl, senderName, status: 'pending' });
+        const txn = await Transaction.create({ userId: req.user._id, userEmail: req.user.email, userFullName: req.user.fullName, phone, amount: plans[plan][duration], plan, duration, paymentMethod: paymentMethod || 'momo', screenshotUrl, senderName, status: 'pending' });
         await User.findByIdAndUpdate(req.user._id, { 'subscription.status': 'pending', 'subscription.plan': plan, 'subscription.duration': duration });
         user.notifications.push({ message: 'Payment submitted! Waiting for admin approval.', type: 'subscription' });
         await user.save();
@@ -522,7 +501,7 @@ app.post('/api/subscribe', authMiddleware, upload.single('paymentScreenshot'), a
 });
 
 // ========== ADMIN ROUTES ==========
-app.get('/api/admin/me', authMiddleware, adminMiddleware, async (req, res) => { const user = await User.findById(req.user.id).select('-password'); res.json({ ...user.toObject(), isHeadAdmin: user.email === 'agasobanuyenews@gmail.com' }); });
+app.get('/api/admin/me', authMiddleware, adminMiddleware, async (req, res) => { const user = await User.findById(req.user.id).select('-password'); res.json({ ...user.toObject(), isHeadAdmin: user.adminLevel === 'head' }); });
 
 app.post('/api/admin/upload', authMiddleware, adminMiddleware, upload.fields([{ name: 'thumbnail', maxCount: 1 }, { name: 'trailer', maxCount: 1 }, { name: 'video', maxCount: 1 }]), async (req, res) => {
     try {
@@ -531,7 +510,7 @@ app.post('/api/admin/upload', authMiddleware, adminMiddleware, upload.fields([{ 
         if (!title || !description || !category || !year) return res.status(400).json({ error: 'Title, Description, Category, Year required!' });
         const thumbnailUrl = await uploadToCloudinary(req.files.thumbnail[0], 'thumbnails');
         const trailerUrl = req.files.trailer?.[0] ? await uploadToCloudinary(req.files.trailer[0], 'trailers', 'video') : '';
-        const data = { type: type || 'movie', title, description, category, year, director: director || '', cast: cast || '', translator: translator || 'Not translated', language: language || 'English', country: country || 'Rwanda', thumbnailUrl: thumbnailUrl, trailerUrl: trailerUrl, accessLevel: accessLevel || 'free', quality: quality || '720p', ageRating: ageRating || '13+', tags: tags ? tags.split(',').map(t => t.trim()) : [], isFeatured: isFeatured === 'true', isTrending: isTrending === 'true', isLatest: true, uploadedBy: req.user._id, uploadedByEmail: req.user.email };
+        const data = { type: type || 'movie', title, description, category, year, director: director || '', cast: cast || '', translator: translator || 'Not translated', language: language || 'English', country: country || 'Rwanda', thumbnailUrl, trailerUrl, accessLevel: accessLevel || 'free', quality: quality || '720p', ageRating: ageRating || '13+', tags: tags ? tags.split(',').map(t => t.trim()) : [], isFeatured: isFeatured === 'true', isTrending: isTrending === 'true', isLatest: true, uploadedBy: req.user._id, uploadedByEmail: req.user.email };
         let videoUrl = '', videoSrc = videoSource || 'external';
         if (videoSrc === 'external' && externalLink?.trim()) videoUrl = externalLink.trim();
         else if (req.files?.video?.[0]) { videoUrl = '/uploads/videos/' + req.files.video[0].filename; videoSrc = 'upload'; }
@@ -545,22 +524,20 @@ app.post('/api/admin/upload', authMiddleware, adminMiddleware, upload.fields([{ 
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Edit content with optional thumbnail upload
-app.put('/api/admin/contents/:id', authMiddleware, adminMiddleware, upload.single('thumbnail'), async (req, res) => {
+app.put('/api/admin/contents/:id', authMiddleware, subAdminOrAbove, upload.fields([{ name: 'thumbnail', maxCount: 1 }, { name: 'trailer', maxCount: 1 }]), async (req, res) => {
     try {
         const updateData = { ...req.body, updatedAt: new Date() };
-        if (req.file) {
-            updateData.thumbnailUrl = await uploadToCloudinary(req.file, 'thumbnails');
-        }
+        if (req.files?.thumbnail?.[0]) updateData.thumbnailUrl = await uploadToCloudinary(req.files.thumbnail[0], 'thumbnails');
+        if (req.files?.trailer?.[0]) updateData.trailerUrl = await uploadToCloudinary(req.files.trailer[0], 'trailers', 'video');
         const c = await Content.findByIdAndUpdate(req.params.id, updateData, { new: true });
         if (!c) return res.status(404).json({ error: 'Not found' });
         res.json({ success: true, content: c });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete('/api/admin/contents/:id', authMiddleware, adminMiddleware, async (req, res) => { await Content.findByIdAndDelete(req.params.id); res.json({ success: true }); });
+app.delete('/api/admin/contents/:id', authMiddleware, subAdminOrAbove, async (req, res) => { await Content.findByIdAndDelete(req.params.id); res.json({ success: true }); });
 
-app.post('/api/admin/movies/:id/part', authMiddleware, adminMiddleware, upload.single('video'), async (req, res) => {
+app.post('/api/admin/movies/:id/part', authMiddleware, subAdminOrAbove, upload.single('video'), async (req, res) => {
     try {
         const c = await Content.findById(req.params.id);
         if (!c || c.type !== 'movie') return res.status(400).json({ error: 'Movie not found' });
@@ -575,7 +552,7 @@ app.post('/api/admin/movies/:id/part', authMiddleware, adminMiddleware, upload.s
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/admin/series/:id/episode', authMiddleware, adminMiddleware, upload.single('video'), async (req, res) => {
+app.post('/api/admin/series/:id/episode', authMiddleware, subAdminOrAbove, upload.single('video'), async (req, res) => {
     try {
         const c = await Content.findById(req.params.id);
         if (!c || c.type !== 'series') return res.status(400).json({ error: 'Series not found' });
@@ -592,7 +569,8 @@ app.post('/api/admin/series/:id/episode', authMiddleware, adminMiddleware, uploa
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/admin/subscriptions', authMiddleware, adminMiddleware, async (req, res) => {
+// ========== SUBSCRIPTIONS (HEAD ADMIN ONLY) ==========
+app.get('/api/admin/subscriptions', authMiddleware, headAdminMiddleware, async (req, res) => {
     const { status } = req.query; let query = {}; if (status) query.status = status;
     const transactions = await Transaction.find(query).sort({ createdAt: -1 });
     const pendingCount = await Transaction.countDocuments({ status: 'pending' });
@@ -601,7 +579,7 @@ app.get('/api/admin/subscriptions', authMiddleware, adminMiddleware, async (req,
     res.json({ transactions, pendingCount, archivedCount, approvedCount, totalRevenue: (await Transaction.aggregate([{ $match: { status: 'approved' } }, { $group: { _id: null, total: { $sum: '$amount' } } }]))[0]?.total || 0 });
 });
 
-app.put('/api/admin/subscriptions/:id', authMiddleware, adminMiddleware, async (req, res) => {
+app.put('/api/admin/subscriptions/:id', authMiddleware, headAdminMiddleware, async (req, res) => {
     const { status, adminNote } = req.body;
     const txn = await Transaction.findById(req.params.id);
     if (!txn) return res.status(404).json({ error: 'Not found' });
@@ -623,25 +601,46 @@ app.put('/api/admin/subscriptions/:id', authMiddleware, adminMiddleware, async (
     } else { res.json({ success: true, message: 'Updated.' }); }
 });
 
-app.get('/api/admin/flagged-users', authMiddleware, adminMiddleware, async (req, res) => { res.json(await User.find({ isFlagged: true }).select('-password')); });
-app.put('/api/admin/flagged-users/:id', authMiddleware, adminMiddleware, async (req, res) => { const user = await User.findById(req.params.id); if (!user) return res.status(404).json({ error: 'Not found' }); if (req.body.action === 'clear') { user.isFlagged = false; user.devices = []; user.deviceCount = 0; } else if (req.body.action === 'terminate') { user.subscription = { plan: 'free', duration: 'none', status: 'expired', maxDevices: 6 }; } await user.save(); res.json({ success: true }); });
-app.get('/api/admin/comments', authMiddleware, adminMiddleware, async (req, res) => { const contents = await Content.find({ 'comments.0': { $exists: true } }).select('title comments'); let all = []; contents.forEach(c => c.comments.forEach(cm => all.push({ _id: cm._id, contentId: c._id, contentTitle: c.title, userName: cm.userName, text: cm.text, likes: cm.likes || 0, createdAt: cm.createdAt }))); res.json(all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))); });
-app.delete('/api/admin/comments/:contentId/:commentId', authMiddleware, adminMiddleware, async (req, res) => { const c = await Content.findById(req.params.contentId); if (!c) return res.status(404).json({ error: 'Not found' }); c.comments = c.comments.filter(cm => cm._id.toString() !== req.params.commentId); await c.save(); res.json({ success: true }); });
+// ========== USER MANAGEMENT (HEAD ADMIN ONLY) ==========
+app.get('/api/admin/users', authMiddleware, headAdminMiddleware, async (req, res) => { res.json(await User.find({ role: { $ne: 'admin' } }).select('-password').sort({ createdAt: -1 })); });
+app.get('/api/admin/users/:id', authMiddleware, headAdminMiddleware, async (req, res) => { const user = await User.findById(req.params.id).select('-password'); if (!user) return res.status(404).json({ error: 'Not found' }); res.json(user); });
+app.put('/api/admin/users/:id', authMiddleware, headAdminMiddleware, async (req, res) => {
+    const { fullName, phone, isFlagged, flagReason, subscription } = req.body;
+    const updateData = {};
+    if (fullName) updateData.fullName = fullName;
+    if (phone) updateData.phone = phone;
+    if (isFlagged !== undefined) updateData.isFlagged = isFlagged;
+    if (flagReason) updateData.flagReason = flagReason;
+    if (subscription) updateData.subscription = subscription;
+    await User.findByIdAndUpdate(req.params.id, updateData);
+    res.json({ success: true });
+});
+app.delete('/api/admin/users/:id', authMiddleware, headAdminMiddleware, async (req, res) => { await User.findByIdAndDelete(req.params.id); res.json({ success: true }); });
 
+// ========== FLAGGED USERS ==========
+app.get('/api/admin/flagged-users', authMiddleware, adminMiddleware, async (req, res) => { res.json(await User.find({ isFlagged: true }).select('-password')); });
+app.put('/api/admin/flagged-users/:id', authMiddleware, headAdminMiddleware, async (req, res) => { const user = await User.findById(req.params.id); if (!user) return res.status(404).json({ error: 'Not found' }); if (req.body.action === 'clear') { user.isFlagged = false; user.devices = []; user.deviceCount = 0; } else if (req.body.action === 'terminate') { user.subscription = { plan: 'free', duration: 'none', status: 'expired', maxDevices: 6 }; } await user.save(); res.json({ success: true }); });
+
+// ========== COMMENTS MANAGEMENT ==========
+app.get('/api/admin/comments', authMiddleware, adminMiddleware, async (req, res) => { const contents = await Content.find({ 'comments.0': { $exists: true } }).select('title comments'); let all = []; contents.forEach(c => c.comments.forEach(cm => all.push({ _id: cm._id, contentId: c._id, contentTitle: c.title, userName: cm.userName, text: cm.text, likes: cm.likes || 0, createdAt: cm.createdAt }))); res.json(all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))); });
+app.delete('/api/admin/comments/:contentId/:commentId', authMiddleware, headAdminMiddleware, async (req, res) => { const c = await Content.findById(req.params.contentId); if (!c) return res.status(404).json({ error: 'Not found' }); c.comments = c.comments.filter(cm => cm._id.toString() !== req.params.commentId); await c.save(); res.json({ success: true }); });
+
+// ========== ADS ==========
 app.get('/api/ads', async (req, res) => { res.json(await Ad.find({ isActive: true }).sort({ createdAt: -1 })); });
 app.get('/api/admin/ads', authMiddleware, adminMiddleware, async (req, res) => { res.json(await Ad.find().sort({ createdAt: -1 })); });
-app.post('/api/admin/ads', authMiddleware, adminMiddleware, upload.single('adMedia'), async (req, res) => {
+app.post('/api/admin/ads', authMiddleware, subAdminOrAbove, upload.single('adMedia'), async (req, res) => {
     const { type, title, description, link, position, contactPhone, contactName, businessName, targetPlans } = req.body;
     let mediaUrl = req.file ? await uploadToCloudinary(req.file, 'ads', 'auto') : req.body.mediaUrl || '';
     const ad = await Ad.create({ type, title, description: description || '', mediaUrl, link: link || '', position: position || 'sidebar', contactPhone: contactPhone || '', contactName: contactName || '', businessName: businessName || '', targetPlans: targetPlans ? targetPlans.split(',').map(p => p.trim()) : ['free'], createdBy: req.user.email });
     res.json({ success: true, ad });
 });
-app.put('/api/admin/ads/:id', authMiddleware, adminMiddleware, async (req, res) => { await Ad.findByIdAndUpdate(req.params.id, { ...req.body, updatedAt: new Date() }); res.json({ success: true }); });
-app.delete('/api/admin/ads/:id', authMiddleware, adminMiddleware, async (req, res) => { await Ad.findByIdAndDelete(req.params.id); res.json({ success: true }); });
+app.put('/api/admin/ads/:id', authMiddleware, subAdminOrAbove, async (req, res) => { await Ad.findByIdAndUpdate(req.params.id, { ...req.body, updatedAt: new Date() }); res.json({ success: true }); });
+app.delete('/api/admin/ads/:id', authMiddleware, subAdminOrAbove, async (req, res) => { await Ad.findByIdAndDelete(req.params.id); res.json({ success: true }); });
 
-app.get('/api/admin/payments', authMiddleware, adminMiddleware, async (req, res) => { const transactions = await Transaction.find({ status: 'approved' }).sort({ createdAt: -1 }); const totalRevenue = transactions.reduce((s, t) => s + (t.amount || 0), 0); const withdrawals = await Withdrawal.find(); const totalWithdrawn = withdrawals.filter(w => w.status === 'completed').reduce((s, w) => s + (w.amount || 0), 0); const subscribers = await User.find({ role: 'user', 'subscription.status': 'active', 'subscription.expiresAt': { $gt: new Date() } }); res.json({ transactions, totalRevenue, totalWithdrawn, availableBalance: totalRevenue - totalWithdrawn, activeSubscribers: subscribers.length, subscribers }); });
-app.post('/api/admin/withdraw', authMiddleware, adminMiddleware, async (req, res) => { const { amount, bankName, accountNumber, accountName } = req.body; const w = await Withdrawal.create({ amount, bankDetails: { bankName, accountNumber, accountName }, requestedBy: req.user._id, requestedByEmail: req.user.email, requestedByName: req.user.fullName }); res.json({ success: true, withdrawal: w }); });
-app.get('/api/admin/withdrawals', authMiddleware, adminMiddleware, async (req, res) => { res.json(await Withdrawal.find().sort({ createdAt: -1 })); });
+// ========== PAYMENTS (HEAD ADMIN ONLY) ==========
+app.get('/api/admin/payments', authMiddleware, headAdminMiddleware, async (req, res) => { const transactions = await Transaction.find({ status: 'approved' }).sort({ createdAt: -1 }); const totalRevenue = transactions.reduce((s, t) => s + (t.amount || 0), 0); const withdrawals = await Withdrawal.find(); const totalWithdrawn = withdrawals.filter(w => w.status === 'completed').reduce((s, w) => s + (w.amount || 0), 0); const subscribers = await User.find({ role: 'user', 'subscription.status': 'active', 'subscription.expiresAt': { $gt: new Date() } }); res.json({ transactions, totalRevenue, totalWithdrawn, availableBalance: totalRevenue - totalWithdrawn, activeSubscribers: subscribers.length, subscribers }); });
+app.post('/api/admin/withdraw', authMiddleware, headAdminMiddleware, async (req, res) => { const { amount, bankName, accountNumber, accountName } = req.body; const w = await Withdrawal.create({ amount, bankDetails: { bankName, accountNumber, accountName }, requestedBy: req.user._id, requestedByEmail: req.user.email, requestedByName: req.user.fullName }); res.json({ success: true, withdrawal: w }); });
+app.get('/api/admin/withdrawals', authMiddleware, headAdminMiddleware, async (req, res) => { res.json(await Withdrawal.find().sort({ createdAt: -1 })); });
 app.put('/api/admin/withdrawals/:id', authMiddleware, headAdminMiddleware, async (req, res) => { await Withdrawal.findByIdAndUpdate(req.params.id, { status: req.body.status, completedAt: new Date(), processedBy: req.user.fullName }); res.json({ success: true }); });
 app.get('/api/admin/stats', authMiddleware, adminMiddleware, async (req, res) => { const totalContent = await Content.countDocuments(); const totalUsers = await User.countDocuments({ role: 'user' }); const activeSubscribers = await User.countDocuments({ role: 'user', 'subscription.status': 'active', 'subscription.expiresAt': { $gt: new Date() } }); const pendingPayments = await Transaction.countDocuments({ status: 'pending' }); const flaggedUsers = await User.countDocuments({ isFlagged: true }); const views = await Content.aggregate([{ $group: { _id: null, total: { $sum: '$views' } } }]); const downloads = await Content.aggregate([{ $group: { _id: null, total: { $sum: '$downloads' } } }]); const revenue = await Transaction.aggregate([{ $match: { status: 'approved' } }, { $group: { _id: null, total: { $sum: '$amount' } } }]); res.json({ totalContent, totalMovies: await Content.countDocuments({ type: 'movie' }), totalSeries: await Content.countDocuments({ type: 'series' }), totalUsers, activeSubscribers, pendingPayments, flaggedUsers, totalViews: views[0]?.total || 0, totalDownloads: downloads[0]?.total || 0, totalComments: (await Content.aggregate([{ $unwind: '$comments' }, { $group: { _id: null, total: { $sum: 1 } } }]))[0]?.total || 0, activeAds: await Ad.countDocuments({ isActive: true }), totalRevenue: revenue[0]?.total || 0 }); });
 
