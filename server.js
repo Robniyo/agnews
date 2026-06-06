@@ -649,6 +649,8 @@ app.post('/api/mylist/:contentId', authMiddleware, async (req, res) => { const u
 app.delete('/api/mylist/:contentId', authMiddleware, async (req, res) => { const user = await User.findById(req.user.id); user.myList = user.myList.filter(id => id.toString() !== req.params.contentId); await user.save(); res.json({ success: true }); });
 app.get('/api/mylist', authMiddleware, async (req, res) => { const user = await User.findById(req.user.id).populate('myList'); res.json(user.myList || []); });
 
+// Health check for Railway
+app.get('/health', (req, res) => { res.status(200).send('OK'); });
 // ========== CLEAN URL ROUTES ==========
 const publicPath = path.join(__dirname, 'public');
 app.use(express.static(publicPath));
