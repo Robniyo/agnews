@@ -539,7 +539,7 @@ app.put('/api/admin/contents/:id', authMiddleware, subAdminOrAbove, upload.field
 
 app.delete('/api/admin/contents/:id', authMiddleware, subAdminOrAbove, async (req, res) => { await Content.findByIdAndDelete(req.params.id); res.json({ success: true }); });
 
-app.post('/api/admin/movies/:id/part', authMiddleware, subAdminOrAbove, upload.single('video'), async (req, res) => {
+app.post('/api/admin/movies/:id/part', authMiddleware, adminMiddleware, upload.single('video'), async (req, res) => {
     try {
         const c = await Content.findById(req.params.id);
         if (!c || c.type !== 'movie') return res.status(400).json({ error: 'Movie not found' });
@@ -554,7 +554,7 @@ app.post('/api/admin/movies/:id/part', authMiddleware, subAdminOrAbove, upload.s
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/admin/series/:id/episode', authMiddleware, subAdminOrAbove, upload.single('video'), async (req, res) => {
+app.post('/api/admin/series/:id/episode', authMiddleware, adminMiddleware, upload.single('video'), async (req, res) => {
     try {
         const c = await Content.findById(req.params.id);
         if (!c || c.type !== 'series') return res.status(400).json({ error: 'Series not found' });
