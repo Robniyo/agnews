@@ -663,5 +663,7 @@ app.get('/index.html', (req, res) => { res.redirect('/'); });
 // ========== START ==========
 createAdmins().then(() => {
     const PORT = process.env.PORT || 3000;
-    app.listen(PORT, '0.0.0.0', () => { console.log('\nAGASOBANUYE MOVIES | AGNEWS\nPort: ' + PORT + '\nAdmin: agasobanuyenews@gmail.com\nVersion: v8\n'); });
+    const server = app.listen(PORT, '0.0.0.0', () => { console.log('\nAGASOBANUYE MOVIES | AGNEWS\nPort: ' + PORT + '\nAdmin: agasobanuyenews@gmail.com\nVersion: v9 - SIGTERM fix\n'); });
+    process.on('SIGTERM', () => { server.close(() => { process.exit(0); }); });
+    process.on('SIGINT', () => { server.close(() => { process.exit(0); }); });
 });
