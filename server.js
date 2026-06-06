@@ -448,9 +448,29 @@ app.get('/api/contents/:id/parts', async (req, res) => {
         if (content.type === 'movie' && content.parts) {
             items = content.parts.map((p, i) => ({ index: i, type: 'part', number: p.partNumber || String(i + 1), title: p.title || 'Part ' + (i + 1), videoUrl: p.videoUrl, videoSource: p.videoSource, accessLevel: p.accessLevel || 'free', streamUrl: getStreamUrl(p.videoUrl), downloadUrl: getDownloadUrl(p.videoUrl), canStream: canStream(p.videoUrl) }));
         } else if (content.type === 'series' && content.seasons) {
-            content.seasons.forEach((season, si) => { if (season.episodes) { season.episodes.forEach((ep, ei) => { items.push({ index: items.length, type: 'episode', seasonIndex: si, episodeIndex: ei, number: 'S' + season.seasonNumber + ' E' + ep.episodeNumber, title: ep.title || 'Episode ' + ep.episodeNumber, seasonTitle: season.title || 'Season ' + season.seasonNumber, videoUrl: ep.videoUrl, videoSource: ep.videoSource, accessLevel: ep.accessLevel || 'free', streamUrl: getStreamUrl(ep.videoUrl), downloadUrl: getDownloadUrl(ep.videoUrl), canStream: canStream(ep.videoUrl) }); }); }); }
+            content.seasons.forEach(function(season, si) {
+                if (season.episodes) {
+                    season.episodes.forEach(function(ep, ei) {
+                        items.push({
+                            index: items.length,
+                            type: 'episode',
+                            seasonIndex: si,
+                            episodeIndex: ei,
+                            number: 'S' + season.seasonNumber + ' E' + ep.episodeNumber,
+                            title: ep.title || 'Episode ' + ep.episodeNumber,
+                            seasonTitle: season.title || 'Season ' + season.seasonNumber,
+                            videoUrl: ep.videoUrl,
+                            videoSource: ep.videoSource,
+                            accessLevel: ep.accessLevel || 'free',
+                            streamUrl: getStreamUrl(ep.videoUrl),
+                            downloadUrl: getDownloadUrl(ep.videoUrl),
+                            canStream: canStream(ep.videoUrl)
+                        });
+                    });
+                }
+            });
         }
-        res.json({ contentTitle: content.title, contentType: content.type, accessLevel: content.accessLevel, thumbnailUrl: content.thumbnailUrl, items, totalItems: items.length });
+        res.json({ contentTitle: content.title, contentType: content.type, accessLevel: content.accessLevel, thumbnailUrl: content.thumbnailUrl, items: items, totalItems: items.length });
     } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
